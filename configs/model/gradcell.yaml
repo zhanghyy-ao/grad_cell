@@ -1,0 +1,11 @@
+model:
+  preference_frequencies: 8
+  task_embedding_dim: 128
+  initializer_width: 256
+  initializer_blocks: 4
+  refiner_hidden_dim: 128
+  refinement_steps: 3
+  max_step_size: 0.20
+  diagonal_min: 0.25
+  diagonal_max: 4.0
+

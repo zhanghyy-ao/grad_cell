@@ -1,0 +1,16 @@
+physics:
+  backend: pybamm
+  model: SPMe
+  parameter_set: Chen2020
+  temperature_k: 298.15
+  precision: float64
+  time_points: 151
+  fixed_horizon_s:
+    1.0: 3600.0
+    3.0: 1200.0
+  output_variables:
+    - Voltage [V]
+  sensitivity_mode: idaklu
+  rtol: 1.0e-6
+  atol: 1.0e-8
+

@@ -1,0 +1,18 @@
+seed: 7
+training:
+  backend: toy
+  steps: 300
+  batch_size: 8
+  learning_rate: 3.0e-4
+  weight_decay: 1.0e-5
+  gradient_clip: 1.0
+  refinement_steps: 0
+  log_every: 25
+loss:
+  tchebycheff_temperature: 0.05
+  augmented_weight: 0.05
+  voltage_cutoff_v: 2.5
+  voltage_gate_temperature_v: 0.02
+  monotonic_weight: 0.5
+  step_weight: 0.001
+

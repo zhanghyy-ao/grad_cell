@@ -1,0 +1,7 @@
+physics:
+  backend: toy
+  time_points: 101
+  fixed_horizon_s:
+    1.0: 3600.0
+    3.0: 1200.0
+
