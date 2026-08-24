@@ -208,7 +208,9 @@ class PyBaMMBackend:
                 trajectories.append(np.stack(output_rows, axis=0))
                 jacobians.append(np.stack(sensitivity_rows, axis=0))
                 statuses.append(1)
-            except Exception:
+            # Numerical solver failures are data in this experiment: convert them
+            # into status=0 and let the PyTorch loss apply a recovery barrier.
+            except Exception:  # noqa: BLE001
                 shape = (len(self.output_variables), self.t_eval.size)
                 trajectories.append(np.full(shape, np.nan, dtype=np.float64))
                 jacobians.append(np.zeros((*shape, len(self.input_names)), dtype=np.float64))
