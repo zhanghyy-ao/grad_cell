@@ -4,6 +4,7 @@ design:
   eps_s: [0.35, 0.60]
   # 0.35 is not feasible for every (eps_n, N/P) pair in the stated bounds.
   # Start at 0.20, then tighten all coupled ranges together after a solver sweep.
+  # 决定了哪些可以被优化
   phi_p_min: 0.20
   inactive_p_min: 0.03
   inactive_n_min: 0.03

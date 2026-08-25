@@ -11,16 +11,16 @@ from .mass_model import MassConstants, stack_mass_kg
 
 @dataclass(frozen=True)
 class CellDesign:
-    eps_p: torch.Tensor
-    eps_n: torch.Tensor
-    eps_s: torch.Tensor
-    phi_p: torch.Tensor
-    phi_n: torch.Tensor
-    np_ratio: torch.Tensor
-    diffusivity_p_multiplier: torch.Tensor
-    diffusivity_n_multiplier: torch.Tensor
-    nominal_capacity_ah: torch.Tensor
-    stack_mass_kg: torch.Tensor
+    eps_p: torch.Tensor          # 正极孔隙率
+    eps_n: torch.Tensor          # 负极孔隙率
+    eps_s: torch.Tensor          # 隔膜孔隙率
+    phi_p: torch.Tensor          # 正极活性材料体积分数
+    phi_n: torch.Tensor          # 负极活性材料体积分数
+    np_ratio: torch.Tensor       # NP比（负极容量/正极容量）
+    diffusivity_p_multiplier: torch.Tensor  # 正极扩散系数乘子
+    diffusivity_n_multiplier: torch.Tensor  # 负极扩散系数乘子
+    nominal_capacity_ah: torch.Tensor       # 标称容量（Ah）
+    stack_mass_kg: torch.Tensor             # 电堆质量（kg）
 
     def physics_tensor(self, c_rate: float) -> torch.Tensor:
         current_a = self.nominal_capacity_ah * c_rate

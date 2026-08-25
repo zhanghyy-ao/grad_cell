@@ -486,6 +486,25 @@ python scripts\validate_gradients.py --backend pybamm --eps 1e-4
 
 `toy` 使用解析 Jacobian；`pybamm` 使用真实 SPMe/IDAKLU sensitivity。正式训练前应在多个设计点、多个 solver tolerance 和多个 `eps` 下重复验证。
 
+### `scripts/qa_physics.py`
+
+这是不训练网络的长时间物理层 QA runner。它按 0.5C、1C、2C、3C 和 nominal/扩散率扰动案例逐个执行 forward、有限差分 sensitivity 与自定义 autograd VJP 检查；每个案例立即追加到 `case_results.jsonl`，并更新 `summary.json`，中断后重新运行会自动跳过已完成案例。
+
+```powershell
+python scripts\qa_physics.py --model DFN --mode all --output-dir results\physics_qa
+```
+
+服务器上可用 `nohup` 或作业调度器运行：
+
+```bash
+mkdir -p results/physics_qa
+nohup python scripts/qa_physics.py --model DFN --mode all \
+  --output-dir results/physics_qa > results/physics_qa/stdout.log 2>&1 &
+tail -f results/physics_qa/run.log
+```
+
+结果文件包括 `metadata.json`、`case_results.jsonl`、`summary.json` 和 `run.log`。若只先验证正向求解，可使用 `--mode forward --max-cases 3`；正式运行前应先用小规模案例检查 DFN 求解时间和失败率。
+
 ### `scripts/train_mvp.py`
 
 创建两个 physics backend，构建 GradCell，训练并保存 checkpoint。主要参数为 `--backend`、`--steps`、`--batch-size`、`--refinement-steps` 和 `--checkpoint`。

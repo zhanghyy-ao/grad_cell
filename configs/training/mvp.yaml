@@ -8,6 +8,11 @@ training:
   gradient_clip: 1.0
   refinement_steps: 0
   log_every: 25
+  validation_interval: 25
+  early_stopping_patience: 100
+  min_delta: 1.0e-4
+  checkpoint_path: results/checkpoints/mvp_training.pt
+  log_path: results/logs/mvp_training.jsonl
 loss:
   tchebycheff_temperature: 0.05
   augmented_weight: 0.05
@@ -15,4 +20,3 @@ loss:
   voltage_gate_temperature_v: 0.02
   monotonic_weight: 0.5
   step_weight: 0.001
-

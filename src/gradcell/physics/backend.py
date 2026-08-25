@@ -8,13 +8,17 @@ import numpy as np
 
 @dataclass(frozen=True)
 class PhysicsBatch:
-    trajectories: np.ndarray
-    jacobian: np.ndarray
-    status: np.ndarray
-    runtime_s: np.ndarray
+    """一次 batch 物理求解的统一返回结构。"""
+
+    trajectories: np.ndarray # 物理输出轨迹
+    jacobian: np.ndarray   # 轨迹对输入参数的 雅可比矩阵（真的可以求得吗？）
+    status: np.ndarray # 求解是否成功
+    runtime_s: np.ndarray # 每个样本的求解时间
 
 
 class PhysicsBackend(Protocol):
+    """所有物理后端必须实现的最小求解接口。"""
+
     def solve_batch(self, inputs: np.ndarray) -> PhysicsBatch: ...
 
 
@@ -26,6 +30,7 @@ class AnalyticToyBackend:
     """
 
     def __init__(self, time_points: int = 101, horizon_s: float = 3600.0) -> None:
+        # 归一化时间网格；horizon_s 由上层性能指标换算为实际时间步长。
         self.t = np.linspace(0.0, 1.0, time_points, dtype=np.float64)
         self.horizon_s = horizon_s
 
@@ -38,7 +43,10 @@ class AnalyticToyBackend:
             raise ValueError("Toy backend expects [B, 8] physics inputs")
         b = x.shape[0]
         t = self.t[None, :]
+        # 输入顺序：正/负极孔隙率、隔膜孔隙率、正/负极活性比例、
+        # 正/负极扩散率乘子和电流。
         eps_p, eps_n, eps_s, phi_p, phi_n, dp, dn, current = [x[:, i : i + 1] for i in range(8)]
+        # 解析 surrogate 的等效内阻。
         resistance = (
             0.10
             + 0.10 * (0.32 - eps_p) ** 2
@@ -47,7 +55,9 @@ class AnalyticToyBackend:
             + 0.018 / dp
             + 0.015 / dn
         )
+        # 用正负极活性材料比例构造简化容量因子。
         capacity_factor = 0.7 * phi_p + 0.3 * phi_n
+        # 生成人工电压轨迹，仅用于软件/梯度测试，不代表真实电化学结果。
         voltage = (
             4.2
             - 1.15 * t
@@ -55,6 +65,7 @@ class AnalyticToyBackend:
             - 0.14 * t**2 / capacity_factor
             + 0.02 * np.sin(np.pi * t)
         )
+        # 对人工公式逐输入求导，提供自定义 autograd 所需 Jacobian。
         jac = np.zeros((b, 1, self.t.size, 8), dtype=np.float64)
         dres_deps_p = 0.20 * (eps_p - 0.32)
         dres_deps_n = 0.20 * (eps_n - 0.32)
@@ -104,11 +115,13 @@ class PyBaMMBackend:
         rtol: float = 1e-6,
         atol: float = 1e-8,
     ) -> None:
+        # 延迟导入 PyBaMM，使 toy 后端和基础测试不依赖该可选依赖。
         try:
             import pybamm
         except ImportError as exc:
             raise ImportError("Install GradCell with `pip install -e .[physics]`") from exc
         self.pybamm = pybamm
+        # 创建指定锂离子模型和参数集。
         model_cls = getattr(pybamm.lithium_ion, model_name)
         self.model = model_cls()
         self.parameters = pybamm.ParameterValues(parameter_set)
@@ -123,11 +136,13 @@ class PyBaMMBackend:
         )
         direct_inputs = self.input_names[:5] + self.input_names[7:]
         for name in direct_inputs:
+            # 将孔隙率、活性比例和电流暴露为运行时输入。
             self.parameters.update({name: pybamm.InputParameter(name)})
         positive_diffusivity = self.parameters["Positive particle diffusivity [m2.s-1]"]
         negative_diffusivity = self.parameters["Negative particle diffusivity [m2.s-1]"]
 
         def scaled_positive_diffusivity(stoichiometry, temperature):
+            # 保留 Chen2020 的浓度/温度依赖，再乘以可优化的扩散率因子。
             base = (
                 positive_diffusivity(stoichiometry, temperature)
                 if callable(positive_diffusivity)
@@ -136,8 +151,9 @@ class PyBaMMBackend:
             return base * pybamm.InputParameter(self.input_names[5])
 
         def scaled_negative_diffusivity(stoichiometry, temperature):
+            # 对负极扩散率执行与正极相同的基准值缩放。
             base = (
-                negative_diffusivity(stoichiometry, temperature)
+                negative_diffusivity(stoichiometry, temperature) #stoichiometry 当前材料颗粒内部已经填充了锂离子的“空位”占所有可用空位的百分比。
                 if callable(negative_diffusivity)
                 else negative_diffusivity
             )
@@ -160,6 +176,7 @@ class PyBaMMBackend:
         self.simulation.build()
 
     def _extract_sensitivity(self, variable, name: str, solution_time: np.ndarray) -> np.ndarray:
+        """提取单个输出对输入的 sensitivity，并插值到固定时间网格。"""
         sensitivities = variable.sensitivities
         if name not in sensitivities:
             raise KeyError(f"No sensitivity for {name!r}; available: {list(sensitivities)}")
@@ -179,12 +196,14 @@ class PyBaMMBackend:
         return value
 
     def solve_batch(self, inputs: np.ndarray) -> PhysicsBatch:
+        """逐样本调用 PyBaMM，返回轨迹和对 8 个输入的 forward sensitivity。"""
         import time
 
         trajectories, jacobians, statuses, runtimes = [], [], [], []
         for row in np.asarray(inputs, dtype=np.float64):
             started = time.perf_counter()
             try:
+                # 将一行输入转换为 PyBaMM 参数名到数值的字典。
                 input_dict = dict(zip(self.input_names, row.tolist()))
                 solution = self.simulation.solve(
                     self.t_eval,
@@ -193,6 +212,7 @@ class PyBaMMBackend:
                 )
                 output_rows, sensitivity_rows = [], []
                 for output_name in self.output_variables:
+                    # 逐输出提取轨迹，并堆叠其对所有输入的导数。
                     variable = solution[output_name]
                     values = np.asarray(variable(self.t_eval), dtype=np.float64).reshape(-1)
                     output_rows.append(values)
