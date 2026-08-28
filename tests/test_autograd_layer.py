@@ -17,3 +17,15 @@ def test_custom_backward_matches_directional_finite_difference():
 
     result = directional_derivative_check(objective, point, eps=1e-6)
     assert result["relative_directional_error"] < 1e-5
+
+
+def test_toy_backend_records_termination_metadata():
+    backend = AnalyticToyBackend(horizon_s=1200.0)
+    inputs = torch.tensor(
+        [[0.3, 0.3, 0.45, 0.55, 0.58, 1.0, 1.0, 2.0]], dtype=torch.float64
+    )
+    DifferentiablePhysicsLayer(backend)(inputs)
+    diagnostics = backend.last_solve_diagnostics[0]
+    assert diagnostics["requested_end_time_s"] == 1200.0
+    assert diagnostics["actual_end_time_s"] == 1200.0
+    assert diagnostics["completed_requested_horizon"] is True

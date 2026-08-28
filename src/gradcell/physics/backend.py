@@ -33,6 +33,7 @@ class AnalyticToyBackend:
         # 归一化时间网格；horizon_s 由上层性能指标换算为实际时间步长。
         self.t = np.linspace(0.0, 1.0, time_points, dtype=np.float64)
         self.horizon_s = horizon_s
+        self.last_solve_diagnostics: list[dict] = []
 
     def solve_batch(self, inputs: np.ndarray) -> PhysicsBatch:
         import time
@@ -79,6 +80,16 @@ class AnalyticToyBackend:
         jac[:, 0, :, 6] = (current * 0.015 / dn**2).repeat(self.t.size, axis=1)
         jac[:, 0, :, 7] = (-resistance).repeat(self.t.size, axis=1)
         elapsed = time.perf_counter() - started
+        self.last_solve_diagnostics = [
+            {
+                "requested_end_time_s": self.horizon_s,
+                "actual_end_time_s": self.horizon_s,
+                "completed_requested_horizon": True,
+                "termination": "analytic toy trajectory completed",
+                "error": None,
+            }
+            for _ in range(b)
+        ]
         return PhysicsBatch(
             trajectories=voltage[:, None, :],
             jacobian=jac,
@@ -168,8 +179,10 @@ class PyBaMMBackend:
         )
         self.solver = pybamm.IDAKLUSolver(rtol=rtol, atol=atol)
         self.t_eval = np.linspace(0.0, horizon_s, time_points)
+        self.horizon_s = horizon_s
         self.output_variables = output_variables
         self.calculate_sensitivities = calculate_sensitivities
+        self.last_solve_diagnostics: list[dict] = []
         self.simulation = pybamm.Simulation(
             self.model,
             parameter_values=self.parameters,
@@ -201,7 +214,7 @@ class PyBaMMBackend:
         """逐样本调用 PyBaMM，返回轨迹和对 8 个输入的 forward sensitivity。"""
         import time
 
-        trajectories, jacobians, statuses, runtimes = [], [], [], []
+        trajectories, jacobians, statuses, runtimes, diagnostics = [], [], [], [], []
         for row in np.asarray(inputs, dtype=np.float64):
             started = time.perf_counter()
             try:
@@ -214,6 +227,7 @@ class PyBaMMBackend:
                         list(self.input_names) if self.calculate_sensitivities else False
                     ),
                 )
+                actual_end_time_s = float(np.asarray(solution.t).reshape(-1)[-1])
                 output_rows, sensitivity_rows = [], []
                 for output_name in self.output_variables:
                     # 逐输出提取轨迹，并堆叠其对所有输入的导数。
@@ -237,14 +251,35 @@ class PyBaMMBackend:
                 trajectories.append(np.stack(output_rows, axis=0))
                 jacobians.append(np.stack(sensitivity_rows, axis=0))
                 statuses.append(1)
+                diagnostics.append(
+                    {
+                        "requested_end_time_s": self.horizon_s,
+                        "actual_end_time_s": actual_end_time_s,
+                        "completed_requested_horizon": bool(
+                            actual_end_time_s >= self.horizon_s - 1e-8
+                        ),
+                        "termination": str(getattr(solution, "termination", "unknown")),
+                        "error": None,
+                    }
+                )
             # Numerical solver failures are data in this experiment: convert them
             # into status=0 and let the PyTorch loss apply a recovery barrier.
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 shape = (len(self.output_variables), self.t_eval.size)
                 trajectories.append(np.full(shape, np.nan, dtype=np.float64))
                 jacobians.append(np.zeros((*shape, len(self.input_names)), dtype=np.float64))
                 statuses.append(0)
+                diagnostics.append(
+                    {
+                        "requested_end_time_s": self.horizon_s,
+                        "actual_end_time_s": None,
+                        "completed_requested_horizon": False,
+                        "termination": "exception",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
             runtimes.append(time.perf_counter() - started)
+        self.last_solve_diagnostics = diagnostics
         return PhysicsBatch(
             trajectories=np.stack(trajectories),
             jacobian=np.stack(jacobians),

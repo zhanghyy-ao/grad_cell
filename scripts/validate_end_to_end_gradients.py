@@ -125,6 +125,8 @@ def main() -> None:
                     "status_3c": int(status_3c.reshape(-1)[0]),
                     "runtime_1c_s": safe_float(runtime_1c.reshape(-1)[0]),
                     "runtime_3c_s": safe_float(runtime_3c.reshape(-1)[0]),
+                    "details_1c": layer_1c.backend.last_solve_diagnostics[0],
+                    "details_3c": layer_3c.backend.last_solve_diagnostics[0],
                 },
                 "voltage_1c": tensor_diagnostics(voltage_1c),
                 "voltage_3c": tensor_diagnostics(voltage_3c),
