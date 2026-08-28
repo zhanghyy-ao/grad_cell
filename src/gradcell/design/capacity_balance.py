@@ -86,4 +86,22 @@ def nominal_capacity_ah(
     )
     return areal_capacity * constants.electrode_area_m2
 
+
+def chen2020_scaled_capacity_ah(
+    positive_active_fraction: torch.Tensor,
+    nominal_capacity_ah: float = 5.0,
+    nominal_positive_active_fraction: float = 0.665,
+) -> torch.Tensor:
+    """Scale Chen2020's nominal 5 Ah capacity by positive active fraction.
+
+    This deliberately conservative alternative keeps the published Chen2020
+    nominal cell as its calibration point instead of assuming a fixed 0.75
+    stoichiometric utilization window for every redesigned cell.
+    """
+    return (
+        positive_active_fraction
+        / nominal_positive_active_fraction
+        * nominal_capacity_ah
+    )
+
 #正极标称容量

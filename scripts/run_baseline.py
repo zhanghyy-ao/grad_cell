@@ -12,13 +12,15 @@ from gradcell.physics import PyBaMMBackend
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a nominal Chen2020 SPMe discharge")
+    parser.add_argument("--model", choices=("SPMe", "DFN"), default="DFN")
     parser.add_argument("--c-rate", type=float, default=1.0)
     parser.add_argument("--output", type=Path, default=Path("results/baseline.json"))
     parser.add_argument("--run-dir", type=Path)
     args = parser.parse_args()
     with ExperimentRun("baseline", args, run_dir=args.run_dir) as run:
-        run.log(f"building Chen2020 SPMe backend for {args.c_rate:g}C")
+        run.log(f"building Chen2020 {args.model} backend for {args.c_rate:g}C")
         backend = PyBaMMBackend(
+            model_name=args.model,
             horizon_s=3600.0 / args.c_rate,
             calculate_sensitivities=False,
         )

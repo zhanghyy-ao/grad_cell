@@ -60,11 +60,11 @@ def first_nonfinite_stage(diagnostics: dict) -> str | None:
     return next((name for name, is_finite in stages if not is_finite), None)
 
 
-def make_layer(backend: str, horizon_s: float) -> DifferentiablePhysicsLayer:
+def make_layer(backend: str, horizon_s: float, model: str) -> DifferentiablePhysicsLayer:
     physics = (
         AnalyticToyBackend(horizon_s=horizon_s)
         if backend == "toy"
-        else PyBaMMBackend(horizon_s=horizon_s)
+        else PyBaMMBackend(model_name=model, horizon_s=horizon_s)
     )
     return DifferentiablePhysicsLayer(physics)
 
@@ -74,6 +74,12 @@ def main() -> None:
         description="Validate decoder -> physics -> metrics -> objective gradients."
     )
     parser.add_argument("--backend", choices=("toy", "pybamm"), default="toy")
+    parser.add_argument("--model", choices=("SPMe", "DFN"), default="DFN")
+    parser.add_argument(
+        "--capacity-formula",
+        choices=("electrode_theoretical", "chen2020_scaled"),
+        default="chen2020_scaled",
+    )
     parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--directions", type=int, default=3)
     parser.add_argument("--eps", type=float, default=1e-4)
@@ -86,10 +92,13 @@ def main() -> None:
     with ExperimentRun("gradient_end_to_end", args, run_dir=args.run_dir) as run:
         torch.set_default_dtype(torch.float64)
         generator = torch.Generator().manual_seed(args.seed)
-        decoder = DesignSpace()
-        run.log(f"building {args.backend} backends")
-        layer_1c = make_layer(args.backend, 3600.0)
-        layer_3c = make_layer(args.backend, 1200.0)
+        decoder = DesignSpace(capacity_formula=args.capacity_formula)
+        run.log(
+            f"building {args.backend}/{args.model} backends; "
+            f"capacity_formula={args.capacity_formula}"
+        )
+        layer_1c = make_layer(args.backend, 3600.0, args.model)
+        layer_3c = make_layer(args.backend, 1200.0, args.model)
         objective = SmoothTchebycheff()
 
         def evaluate(latent: torch.Tensor) -> tuple[torch.Tensor, dict]:
@@ -208,6 +217,8 @@ def main() -> None:
         ]
         report = {
             "backend": args.backend,
+            "model": args.model,
+            "capacity_formula": args.capacity_formula,
             "eps": args.eps,
             "samples": args.samples,
             "directions_per_sample": args.directions,

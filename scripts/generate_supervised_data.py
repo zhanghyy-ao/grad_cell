@@ -24,10 +24,11 @@ TARGET_FIELDS = (
 )
 
 
-def make_backend(name: str, horizon_s: float, time_points: int):
+def make_backend(name: str, model: str, horizon_s: float, time_points: int):
     if name == "toy":
         return AnalyticToyBackend(time_points=time_points, horizon_s=horizon_s)
     return PyBaMMBackend(
+        model_name=model,
         time_points=time_points,
         horizon_s=horizon_s,
         calculate_sensitivities=False,
@@ -59,9 +60,15 @@ def save_dataset(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate random hard-feasible Chen2020 designs and SPMe labels."
+        description="Generate random hard-feasible Chen2020 designs and physics labels."
     )
     parser.add_argument("--backend", choices=("pybamm", "toy"), default="pybamm")
+    parser.add_argument("--model", choices=("SPMe", "DFN"), default="DFN")
+    parser.add_argument(
+        "--capacity-formula",
+        choices=("electrode_theoretical", "chen2020_scaled"),
+        default="chen2020_scaled",
+    )
     parser.add_argument("--samples", type=int, default=2000)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--latent-std", type=float, default=1.25)
@@ -75,10 +82,13 @@ def main() -> None:
     with ExperimentRun("generate_supervised_data", args, run_dir=args.run_dir) as run:
         torch.set_default_dtype(torch.float64)
         torch.manual_seed(args.seed)
-        decoder = DesignSpace()
-        run.log(f"building {args.backend} 1C/3C backends")
-        backend_1c = make_backend(args.backend, 3600.0, args.time_points)
-        backend_3c = make_backend(args.backend, 1200.0, args.time_points)
+        decoder = DesignSpace(capacity_formula=args.capacity_formula)
+        run.log(
+            f"building {args.backend}/{args.model} 1C/3C backends; "
+            f"capacity_formula={args.capacity_formula}"
+        )
+        backend_1c = make_backend(args.backend, args.model, 3600.0, args.time_points)
+        backend_3c = make_backend(args.backend, args.model, 1200.0, args.time_points)
         latent = args.latent_std * torch.randn(args.samples, decoder.latent_dim)
         saved_latent, saved_design, saved_targets = [], [], []
         failed_indices: list[int] = []
@@ -155,7 +165,8 @@ def main() -> None:
             "status": "completed",
             "backend": args.backend,
             "parameter_set": "Chen2020",
-            "model": "SPMe" if args.backend == "pybamm" else "analytic-toy",
+            "model": args.model if args.backend == "pybamm" else "analytic-toy",
+            "capacity_formula": args.capacity_formula,
             "seed": args.seed,
             "requested_samples": args.samples,
             "valid_samples": sum(values.shape[0] for values in saved_latent),

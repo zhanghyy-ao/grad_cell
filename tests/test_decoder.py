@@ -1,6 +1,7 @@
 import torch
 
 from gradcell.design import DesignSpace
+from gradcell.design.capacity_balance import chen2020_scaled_capacity_ah
 
 
 def test_decoder_is_hard_feasible():
@@ -24,3 +25,17 @@ def test_np_ratio_is_exact():
     q_n = c.negative_thickness_m * design.phi_n * c.negative_cmax_mol_m3 * c.negative_stoich_window
     torch.testing.assert_close(q_n / q_p, design.np_ratio)
 
+
+def test_chen2020_scaled_capacity_matches_nominal_calibration():
+    phi_p = torch.tensor([0.665], dtype=torch.float64)
+    torch.testing.assert_close(
+        chen2020_scaled_capacity_ah(phi_p),
+        torch.tensor([5.0], dtype=torch.float64),
+    )
+
+
+def test_chen2020_scaled_capacity_is_more_conservative_in_current_design_range():
+    latent = torch.zeros(8, 7, dtype=torch.float64)
+    theoretical = DesignSpace(capacity_formula="electrode_theoretical")(latent)
+    scaled = DesignSpace(capacity_formula="chen2020_scaled")(latent)
+    assert torch.all(scaled.nominal_capacity_ah < theoretical.nominal_capacity_ah)

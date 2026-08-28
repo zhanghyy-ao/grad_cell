@@ -5,7 +5,12 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from .capacity_balance import CapacityConstants, negative_active_fraction, nominal_capacity_ah
+from .capacity_balance import (
+    CapacityConstants,
+    chen2020_scaled_capacity_ah,
+    negative_active_fraction,
+    nominal_capacity_ah,
+)
 from .mass_model import MassConstants, stack_mass_kg
 
 
@@ -54,6 +59,7 @@ class DesignSpace(nn.Module):
         inactive_p_min=0.03,
         inactive_n_min=0.03,
         diffusivity_multiplier_bounds=(0.5, 2.0),
+        capacity_formula: str = "electrode_theoretical",
     ) -> None:
         super().__init__()
         self.eps_p_bounds = eps_p_bounds
@@ -64,6 +70,9 @@ class DesignSpace(nn.Module):
         self.inactive_p_min = inactive_p_min
         self.inactive_n_min = inactive_n_min
         self.diffusivity_multiplier_bounds = diffusivity_multiplier_bounds
+        if capacity_formula not in ("electrode_theoretical", "chen2020_scaled"):
+            raise ValueError(f"Unknown capacity formula: {capacity_formula}")
+        self.capacity_formula = capacity_formula
         self.capacity_constants = CapacityConstants()
         self.mass_constants = MassConstants()
 
@@ -116,7 +125,10 @@ class DesignSpace(nn.Module):
         diffusivity_n_multiplier = self._log_bounded(
             latent[..., 6], self.diffusivity_multiplier_bounds
         )
-        capacity = nominal_capacity_ah(phi_p, self.capacity_constants)
+        if self.capacity_formula == "electrode_theoretical":
+            capacity = nominal_capacity_ah(phi_p, self.capacity_constants)
+        else:
+            capacity = chen2020_scaled_capacity_ah(phi_p)
         mass = stack_mass_kg(
             eps_p, eps_n, eps_s, phi_p, phi_n, self.mass_constants
         )

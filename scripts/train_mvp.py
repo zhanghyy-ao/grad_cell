@@ -5,6 +5,7 @@ from pathlib import Path
 
 import torch
 
+from gradcell.design import DesignSpace
 from gradcell.experiments import ExperimentRun
 from gradcell.models import GradCell
 from gradcell.physics import AnalyticToyBackend, DifferentiablePhysicsLayer, PyBaMMBackend
@@ -14,6 +15,12 @@ from gradcell.training.trainer import train
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=("toy", "pybamm"), default="toy")
+    parser.add_argument("--model", choices=("SPMe", "DFN"), default="DFN")
+    parser.add_argument(
+        "--capacity-formula",
+        choices=("electrode_theoretical", "chen2020_scaled"),
+        default="chen2020_scaled",
+    )
     parser.add_argument("--steps", type=int, default=300)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--refinement-steps", type=int, default=0)
@@ -27,16 +34,20 @@ def main() -> None:
     args = parser.parse_args()
     with ExperimentRun("train_mvp", args, run_dir=args.run_dir) as run:
         torch.manual_seed(args.seed)
-        run.log(f"building {args.backend} 1C/3C backends")
+        run.log(
+            f"building {args.backend}/{args.model} 1C/3C backends; "
+            f"capacity_formula={args.capacity_formula}"
+        )
         if args.backend == "toy":
             backend1 = AnalyticToyBackend(horizon_s=3600.0)
             backend3 = AnalyticToyBackend(horizon_s=1200.0)
         else:
-            backend1 = PyBaMMBackend(horizon_s=3600.0)
-            backend3 = PyBaMMBackend(horizon_s=1200.0)
+            backend1 = PyBaMMBackend(model_name=args.model, horizon_s=3600.0)
+            backend3 = PyBaMMBackend(model_name=args.model, horizon_s=1200.0)
         model = GradCell(
             DifferentiablePhysicsLayer(backend1),
             DifferentiablePhysicsLayer(backend3),
+            design_space=DesignSpace(capacity_formula=args.capacity_formula),
         ).double()
         run.event("training_started", parameter_count=sum(p.numel() for p in model.parameters()))
         result = train(
