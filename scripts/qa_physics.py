@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """Long-running forward/sensitivity/autograd QA for the GradCell physics layer.
 
 This script deliberately does not import GradCell, create an optimizer, or train
 any network. It validates only the physical backend and its VJP wrapper.
 """
+
+from __future__ import annotations
 
 import argparse
 import json
@@ -13,7 +13,7 @@ import math
 import platform
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -389,4 +389,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
