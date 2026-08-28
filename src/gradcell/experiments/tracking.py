@@ -16,10 +16,10 @@ from typing import Any
 def _json_default(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
-    if hasattr(value, "item"):
-        return value.item()
     if hasattr(value, "tolist"):
         return value.tolist()
+    if hasattr(value, "item"):
+        return value.item()
     return str(value)
 
 

@@ -1,5 +1,7 @@
 import json
 
+import numpy as np
+
 from gradcell.experiments import ExperimentRun
 
 
@@ -14,6 +16,18 @@ def test_experiment_run_records_success(tmp_path):
     assert metadata["status"] == "completed"
     assert summary["metric"] == 0.25
     assert '"event": "progress"' in events
+
+
+def test_experiment_run_serializes_numpy_arrays(tmp_path):
+    with ExperimentRun("array_test", {}, run_dir=tmp_path / "array") as run:
+        run.event("inputs", values=np.array([[1.0, 2.0], [3.0, 4.0]]))
+
+    records = [
+        json.loads(line)
+        for line in (run.path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    input_record = next(record for record in records if record["event"] == "inputs")
+    assert input_record["values"] == [[1.0, 2.0], [3.0, 4.0]]
 
 
 def test_experiment_run_records_failure(tmp_path):
