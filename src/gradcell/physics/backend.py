@@ -114,6 +114,7 @@ class PyBaMMBackend:
         horizon_s: float = 3600.0,
         rtol: float = 1e-6,
         atol: float = 1e-8,
+        calculate_sensitivities: bool = True,
     ) -> None:
         # 延迟导入 PyBaMM，使 toy 后端和基础测试不依赖该可选依赖。
         try:
@@ -168,6 +169,7 @@ class PyBaMMBackend:
         self.solver = pybamm.IDAKLUSolver(rtol=rtol, atol=atol)
         self.t_eval = np.linspace(0.0, horizon_s, time_points)
         self.output_variables = output_variables
+        self.calculate_sensitivities = calculate_sensitivities
         self.simulation = pybamm.Simulation(
             self.model,
             parameter_values=self.parameters,
@@ -208,7 +210,9 @@ class PyBaMMBackend:
                 solution = self.simulation.solve(
                     self.t_eval,
                     inputs=input_dict,
-                    calculate_sensitivities=list(self.input_names),
+                    calculate_sensitivities=(
+                        list(self.input_names) if self.calculate_sensitivities else False
+                    ),
                 )
                 output_rows, sensitivity_rows = [], []
                 for output_name in self.output_variables:
@@ -216,15 +220,20 @@ class PyBaMMBackend:
                     variable = solution[output_name]
                     values = np.asarray(variable(self.t_eval), dtype=np.float64).reshape(-1)
                     output_rows.append(values)
-                    sensitivity_rows.append(
-                        np.stack(
-                            [
-                                self._extract_sensitivity(variable, name, solution.t)
-                                for name in self.input_names
-                            ],
-                            axis=-1,
+                    if self.calculate_sensitivities:
+                        sensitivity_rows.append(
+                            np.stack(
+                                [
+                                    self._extract_sensitivity(variable, name, solution.t)
+                                    for name in self.input_names
+                                ],
+                                axis=-1,
+                            )
                         )
-                    )
+                    else:
+                        sensitivity_rows.append(
+                            np.zeros((self.t_eval.size, len(self.input_names)), dtype=np.float64)
+                        )
                 trajectories.append(np.stack(output_rows, axis=0))
                 jacobians.append(np.stack(sensitivity_rows, axis=0))
                 statuses.append(1)
