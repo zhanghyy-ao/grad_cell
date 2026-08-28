@@ -60,11 +60,20 @@ def first_nonfinite_stage(diagnostics: dict) -> str | None:
     return next((name for name, is_finite in stages if not is_finite), None)
 
 
-def make_layer(backend: str, horizon_s: float, model: str) -> DifferentiablePhysicsLayer:
+def make_layer(
+    backend: str,
+    horizon_s: float,
+    model: str,
+    current_ramp_time_s: float,
+) -> DifferentiablePhysicsLayer:
     physics = (
         AnalyticToyBackend(horizon_s=horizon_s)
         if backend == "toy"
-        else PyBaMMBackend(model_name=model, horizon_s=horizon_s)
+        else PyBaMMBackend(
+            model_name=model,
+            horizon_s=horizon_s,
+            current_ramp_time_s=current_ramp_time_s,
+        )
     )
     return DifferentiablePhysicsLayer(physics)
 
@@ -83,6 +92,7 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--directions", type=int, default=3)
     parser.add_argument("--eps", type=float, default=1e-4)
+    parser.add_argument("--current-ramp-time-s", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--preference", type=float, default=0.5)
     parser.add_argument("--output", type=Path, default=Path("results/gradient_chain.json"))
@@ -97,8 +107,8 @@ def main() -> None:
             f"building {args.backend}/{args.model} backends; "
             f"capacity_formula={args.capacity_formula}"
         )
-        layer_1c = make_layer(args.backend, 3600.0, args.model)
-        layer_3c = make_layer(args.backend, 1200.0, args.model)
+        layer_1c = make_layer(args.backend, 3600.0, args.model, args.current_ramp_time_s)
+        layer_3c = make_layer(args.backend, 1200.0, args.model, args.current_ramp_time_s)
         objective = SmoothTchebycheff()
 
         def evaluate(latent: torch.Tensor) -> tuple[torch.Tensor, dict]:

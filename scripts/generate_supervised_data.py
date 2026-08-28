@@ -24,7 +24,13 @@ TARGET_FIELDS = (
 )
 
 
-def make_backend(name: str, model: str, horizon_s: float, time_points: int):
+def make_backend(
+    name: str,
+    model: str,
+    horizon_s: float,
+    time_points: int,
+    current_ramp_time_s: float,
+):
     if name == "toy":
         return AnalyticToyBackend(time_points=time_points, horizon_s=horizon_s)
     return PyBaMMBackend(
@@ -32,6 +38,7 @@ def make_backend(name: str, model: str, horizon_s: float, time_points: int):
         time_points=time_points,
         horizon_s=horizon_s,
         calculate_sensitivities=False,
+        current_ramp_time_s=current_ramp_time_s,
     )
 
 
@@ -73,6 +80,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--latent-std", type=float, default=1.25)
     parser.add_argument("--time-points", type=int, default=151)
+    parser.add_argument("--current-ramp-time-s", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--output", type=Path, default=Path("data/chen2020_supervised.npz"))
     parser.add_argument("--snapshot-every", type=int, default=100)
@@ -87,8 +95,12 @@ def main() -> None:
             f"building {args.backend}/{args.model} 1C/3C backends; "
             f"capacity_formula={args.capacity_formula}"
         )
-        backend_1c = make_backend(args.backend, args.model, 3600.0, args.time_points)
-        backend_3c = make_backend(args.backend, args.model, 1200.0, args.time_points)
+        backend_1c = make_backend(
+            args.backend, args.model, 3600.0, args.time_points, args.current_ramp_time_s
+        )
+        backend_3c = make_backend(
+            args.backend, args.model, 1200.0, args.time_points, args.current_ramp_time_s
+        )
         latent = args.latent_std * torch.randn(args.samples, decoder.latent_dim)
         saved_latent, saved_design, saved_targets = [], [], []
         failed_indices: list[int] = []

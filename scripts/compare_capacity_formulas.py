@@ -38,6 +38,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--latent-scale", type=float, default=0.7)
     parser.add_argument("--time-points", type=int, default=151)
+    parser.add_argument("--current-ramp-time-s", type=float, default=1.0)
     parser.add_argument(
         "--output", type=Path, default=Path("results/capacity_formula_comparison.json")
     )
@@ -54,12 +55,14 @@ def main() -> None:
             horizon_s=3600.0,
             time_points=args.time_points,
             calculate_sensitivities=False,
+            current_ramp_time_s=args.current_ramp_time_s,
         )
         backend_3c = PyBaMMBackend(
             model_name=args.model,
             horizon_s=1200.0,
             time_points=args.time_points,
             calculate_sensitivities=False,
+            current_ramp_time_s=args.current_ramp_time_s,
         )
         records = []
         for sample_index in range(args.samples):

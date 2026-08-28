@@ -126,6 +126,7 @@ class PyBaMMBackend:
         rtol: float = 1e-6,
         atol: float = 1e-8,
         calculate_sensitivities: bool = True,
+        current_ramp_time_s: float = 1.0,
     ) -> None:
         # 延迟导入 PyBaMM，使 toy 后端和基础测试不依赖该可选依赖。
         try:
@@ -133,6 +134,9 @@ class PyBaMMBackend:
         except ImportError as exc:
             raise ImportError("Install GradCell with `pip install -e .[physics]`") from exc
         self.pybamm = pybamm
+        if current_ramp_time_s < 0.0:
+            raise ValueError("current_ramp_time_s must be non-negative")
+        self.current_ramp_time_s = current_ramp_time_s
         # 创建指定锂离子模型和参数集。
         model_cls = getattr(pybamm.lithium_ion, model_name)
         self.model = model_cls()
@@ -146,10 +150,22 @@ class PyBaMMBackend:
                 "Upper voltage cut-off [V]": 10.0,
             }
         )
-        direct_inputs = self.input_names[:5] + self.input_names[7:]
+        direct_inputs = self.input_names[:5]
         for name in direct_inputs:
             # 将孔隙率、活性比例和电流暴露为运行时输入。
             self.parameters.update({name: pybamm.InputParameter(name)})
+        if current_ramp_time_s == 0.0:
+            self.parameters.update(
+                {self.input_names[7]: pybamm.InputParameter(self.input_names[7])}
+            )
+        else:
+
+            def smooth_current(time):
+                target = pybamm.InputParameter(self.input_names[7])
+                ramp = 1.0 - pybamm.exp(-time / current_ramp_time_s)
+                return target * ramp
+
+            self.parameters.update({self.input_names[7]: smooth_current})
         positive_diffusivity = self.parameters["Positive particle diffusivity [m2.s-1]"]
         negative_diffusivity = self.parameters["Negative particle diffusivity [m2.s-1]"]
 
@@ -259,6 +275,7 @@ class PyBaMMBackend:
                             actual_end_time_s >= self.horizon_s - 1e-8
                         ),
                         "termination": str(getattr(solution, "termination", "unknown")),
+                        "current_ramp_time_s": self.current_ramp_time_s,
                         "error": None,
                     }
                 )
@@ -275,6 +292,7 @@ class PyBaMMBackend:
                         "actual_end_time_s": None,
                         "completed_requested_horizon": False,
                         "termination": "exception",
+                        "current_ramp_time_s": self.current_ramp_time_s,
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                 )

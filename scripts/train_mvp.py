@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--refinement-steps", type=int, default=0)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--current-ramp-time-s", type=float, default=1.0)
     parser.add_argument("--validation-interval", type=int, default=25)
     parser.add_argument("--early-stopping-patience", type=int)
     parser.add_argument("--seed", type=int, default=7)
@@ -42,8 +43,16 @@ def main() -> None:
             backend1 = AnalyticToyBackend(horizon_s=3600.0)
             backend3 = AnalyticToyBackend(horizon_s=1200.0)
         else:
-            backend1 = PyBaMMBackend(model_name=args.model, horizon_s=3600.0)
-            backend3 = PyBaMMBackend(model_name=args.model, horizon_s=1200.0)
+            backend1 = PyBaMMBackend(
+                model_name=args.model,
+                horizon_s=3600.0,
+                current_ramp_time_s=args.current_ramp_time_s,
+            )
+            backend3 = PyBaMMBackend(
+                model_name=args.model,
+                horizon_s=1200.0,
+                current_ramp_time_s=args.current_ramp_time_s,
+            )
         model = GradCell(
             DifferentiablePhysicsLayer(backend1),
             DifferentiablePhysicsLayer(backend3),

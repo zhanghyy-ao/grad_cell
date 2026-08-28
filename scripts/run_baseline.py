@@ -14,6 +14,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run a nominal Chen2020 SPMe discharge")
     parser.add_argument("--model", choices=("SPMe", "DFN"), default="DFN")
     parser.add_argument("--c-rate", type=float, default=1.0)
+    parser.add_argument("--current-ramp-time-s", type=float, default=1.0)
     parser.add_argument("--output", type=Path, default=Path("results/baseline.json"))
     parser.add_argument("--run-dir", type=Path)
     args = parser.parse_args()
@@ -23,6 +24,7 @@ def main() -> None:
             model_name=args.model,
             horizon_s=3600.0 / args.c_rate,
             calculate_sensitivities=False,
+            current_ramp_time_s=args.current_ramp_time_s,
         )
         nominal_capacity_ah = 5.0
         inputs = np.array(

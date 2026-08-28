@@ -11,22 +11,25 @@ from gradcell.physics import AnalyticToyBackend, DifferentiablePhysicsLayer, PyB
 from gradcell.physics.gradient_validation import directional_derivative_check
 
 
-def make_backend(name: str):
+def make_backend(name: str, current_ramp_time_s: float):
     if name == "toy":
         return AnalyticToyBackend()
-    return PyBaMMBackend()
+    return PyBaMMBackend(current_ramp_time_s=current_ramp_time_s)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=("toy", "pybamm"), default="toy")
     parser.add_argument("--eps", type=float, default=1e-4)
+    parser.add_argument("--current-ramp-time-s", type=float, default=1.0)
     parser.add_argument("--output", type=Path, default=Path("results/gradient_physics.json"))
     parser.add_argument("--run-dir", type=Path)
     args = parser.parse_args()
     with ExperimentRun("gradient_physics", args, run_dir=args.run_dir) as run:
         run.log(f"validating {args.backend} physics gradient with eps={args.eps:g}")
-        layer = DifferentiablePhysicsLayer(make_backend(args.backend))
+        layer = DifferentiablePhysicsLayer(
+            make_backend(args.backend, args.current_ramp_time_s)
+        )
         point = torch.tensor(
             [[0.30, 0.30, 0.45, 0.55, 0.58, 1.0, 1.0, 2.0]],
             dtype=torch.float64,
