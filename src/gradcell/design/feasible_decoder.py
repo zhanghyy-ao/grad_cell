@@ -45,9 +45,13 @@ class CellDesign:
 
 
 class DesignSpace(nn.Module):
-    """Map seven unconstrained variables to a hard-feasible Chen2020 design."""
+    """Map five structural variables to a hard-feasible Chen2020 design.
 
-    latent_dim = 7
+    Chen2020 material properties are fixed in this stage, so both solid-phase
+    diffusivity multipliers are identically one rather than optimization inputs.
+    """
+
+    latent_dim = 5
 
     def __init__(
         self,
@@ -58,7 +62,6 @@ class DesignSpace(nn.Module):
         phi_p_min=0.20,
         inactive_p_min=0.03,
         inactive_n_min=0.03,
-        diffusivity_multiplier_bounds=(0.5, 2.0),
         capacity_formula: str = "electrode_theoretical",
     ) -> None:
         super().__init__()
@@ -69,7 +72,6 @@ class DesignSpace(nn.Module):
         self.phi_p_min = phi_p_min
         self.inactive_p_min = inactive_p_min
         self.inactive_n_min = inactive_n_min
-        self.diffusivity_multiplier_bounds = diffusivity_multiplier_bounds
         if capacity_formula not in ("electrode_theoretical", "chen2020_scaled"):
             raise ValueError(f"Unknown capacity formula: {capacity_formula}")
         self.capacity_formula = capacity_formula
@@ -80,16 +82,6 @@ class DesignSpace(nn.Module):
     def _bounded(value: torch.Tensor, bounds: tuple[float, float]) -> torch.Tensor:
         low, high = bounds
         return low + (high - low) * torch.sigmoid(value)
-
-    @staticmethod
-    def _log_bounded(value: torch.Tensor, bounds: tuple[float, float]):
-        low, high = bounds
-        log_multiplier = torch.log(
-            torch.as_tensor(low, dtype=value.dtype, device=value.device)
-        ) + torch.sigmoid(value) * torch.log(
-            torch.as_tensor(high / low, dtype=value.dtype, device=value.device)
-        )
-        return torch.exp(log_multiplier)
 
     def forward(self, latent: torch.Tensor) -> CellDesign:
         if latent.shape[-1] != self.latent_dim:
@@ -119,12 +111,8 @@ class DesignSpace(nn.Module):
             phi_p_max - self.phi_p_min
         )
         phi_n = negative_active_fraction(phi_p, np_ratio, self.capacity_constants)
-        diffusivity_p_multiplier = self._log_bounded(
-            latent[..., 5], self.diffusivity_multiplier_bounds
-        )
-        diffusivity_n_multiplier = self._log_bounded(
-            latent[..., 6], self.diffusivity_multiplier_bounds
-        )
+        diffusivity_p_multiplier = torch.ones_like(phi_p)
+        diffusivity_n_multiplier = torch.ones_like(phi_n)
         if self.capacity_formula == "electrode_theoretical":
             capacity = nominal_capacity_ah(phi_p, self.capacity_constants)
         else:

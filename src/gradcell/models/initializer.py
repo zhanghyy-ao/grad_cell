@@ -22,7 +22,7 @@ class DesignInitializer(nn.Module):
     def __init__(
         self,
         task_dim: int = 128,
-        latent_dim: int = 7,
+        latent_dim: int = 5,
         width: int = 256,
         blocks: int = 4,
         initial_scale: float = 2.0,
@@ -38,4 +38,3 @@ class DesignInitializer(nn.Module):
     def forward(self, task_embedding: torch.Tensor) -> torch.Tensor:
         delta = self.output(self.blocks(self.input(task_embedding)))
         return self.initial_scale * torch.tanh(delta)
-

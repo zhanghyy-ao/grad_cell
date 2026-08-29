@@ -59,7 +59,8 @@ nohup python scripts/generate_supervised_data.py \
 tail -f results/logs/generate_supervised.log
 ```
 
-NPZ 包含 7 维 latent、10 个解码后设计量、9 个监督标签和 JSON metadata。
+NPZ 包含 5 维结构 latent、10 个解码后设计量、9 个监督标签和 JSON metadata。
+正负极固相扩散系数乘子固定为 `1.0`，不再作为随机变量或优化变量。
 标签包括低倍率参考容量、1C/3C 实际容量、1C 比能量、3C 比功率、1C/3C
 平均放电电压和实际放电时间。失败样本不会进入训练集；索引及容量标定、1C、3C
 三个阶段的终止原因写入同名 JSON。

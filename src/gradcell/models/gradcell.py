@@ -45,8 +45,12 @@ class GradCell(nn.Module):
         super().__init__()
         self.design_space = design_space or DesignSpace()
         self.task_encoder = FourierPreferenceEncoder(embedding_dim=task_dim)
-        self.initializer = DesignInitializer(task_dim=task_dim)
-        self.refiner = DiagonalPhysicsRefiner(task_dim=task_dim)
+        self.initializer = DesignInitializer(
+            task_dim=task_dim, latent_dim=self.design_space.latent_dim
+        )
+        self.refiner = DiagonalPhysicsRefiner(
+            task_dim=task_dim, latent_dim=self.design_space.latent_dim
+        )
         self.physics_1c = physics_1c
         self.physics_3c = physics_3c
         self.objective = objective or SmoothTchebycheff()

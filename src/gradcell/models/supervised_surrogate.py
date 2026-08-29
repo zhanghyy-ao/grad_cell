@@ -9,7 +9,7 @@ class Chen2020Surrogate(nn.Module):
 
     def __init__(
         self,
-        input_dim: int = 7,
+        input_dim: int = 5,
         output_dim: int = 4,
         hidden_dim: int = 256,
         depth: int = 4,

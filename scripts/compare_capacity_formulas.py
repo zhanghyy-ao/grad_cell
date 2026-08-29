@@ -48,7 +48,10 @@ def main() -> None:
     with ExperimentRun("compare_capacity_formulas", args, run_dir=args.run_dir) as run:
         torch.set_default_dtype(torch.float64)
         generator = torch.Generator().manual_seed(args.seed)
-        latent = args.latent_scale * torch.randn(args.samples, 7, generator=generator)
+        latent_dim = DesignSpace.latent_dim
+        latent = args.latent_scale * torch.randn(
+            args.samples, latent_dim, generator=generator
+        )
         run.log(f"building Chen2020 {args.model} backends")
         backend_1c = PyBaMMBackend(
             model_name=args.model,

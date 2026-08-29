@@ -61,7 +61,9 @@ def test_failed_sample_does_not_contaminate_valid_sample():
         DifferentiablePhysicsLayer(ControlledFailureBackend()),
         DifferentiablePhysicsLayer(ControlledFailureBackend()),
     ).double()
-    latent = torch.full((2, 7), 0.2, dtype=torch.float64, requires_grad=True)
+    latent = torch.full(
+        (2, model.design_space.latent_dim), 0.2, dtype=torch.float64, requires_grad=True
+    )
     step = model.evaluate(latent, torch.tensor([0.3, 0.7], dtype=torch.float64))
 
     assert step.status.tolist() == [1, 0]
@@ -81,7 +83,9 @@ def test_all_failed_batch_has_finite_loss_and_gradient():
         DifferentiablePhysicsLayer(ControlledFailureBackend(fail_all=True)),
         DifferentiablePhysicsLayer(ControlledFailureBackend(fail_all=True)),
     ).double()
-    latent = torch.full((2, 7), 0.2, dtype=torch.float64, requires_grad=True)
+    latent = torch.full(
+        (2, model.design_space.latent_dim), 0.2, dtype=torch.float64, requires_grad=True
+    )
     step = model.evaluate(latent, torch.tensor([0.3, 0.7], dtype=torch.float64))
 
     assert step.status.tolist() == [0, 0]

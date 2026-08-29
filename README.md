@@ -9,7 +9,7 @@ GradCell 是一个面向电芯逆向设计的研究原型。模型接收能量�
     ↓
 目标编码器与设计初始化器
     ↓
-7 维无约束 latent design u
+5 维无约束结构 latent design u
     ↓
 硬可行设计解码器 T(u)
     ↓
@@ -34,7 +34,7 @@ Initializer 参数训练或 K 步 Learned Refiner 修正
 
 - 目标偏好 Fourier 编码；
 - 目标条件化电芯设计初始化器；
-- 7 维硬可行设计解码器；
+- 5 维硬可行结构设计解码器；
 - 正负极容量平衡和 N/P 约束；
 - 额定容量、C-rate 电流和 stack mass 计算；
 - 解析 toy physics 后端；
@@ -218,10 +218,10 @@ Qnom = F × A × Lp × φp × cmax,p × Δθp / 3600
  diffusivity_p_multiplier, diffusivity_n_multiplier, current_a]
 ```
 
-`DesignSpace` 将任意 `[..., 7]` latent Tensor 映射到硬可行设计：
+`DesignSpace` 将任意 `[..., 5]` latent Tensor 映射到硬可行设计。Chen2020
+正负极固相扩散系数乘子固定为 `1.0`，不作为优化变量：
 
 - `_bounded` 用 sigmoid 映射普通有界参数；
-- `_log_bounded` 在 log-space 映射正值乘子；
 - `forward/decode` 执行完整设计解码；
 - `nominal_latent` 返回全零 nominal latent。
 
@@ -346,7 +346,7 @@ finite difference = [f(x + εv) - f(x - εv)] / (2ε)
 
 `ResidualBlock` 由两层线性层、SiLU 和 LayerNorm 组成，并使用 residual connection。
 
-`DesignInitializer` 将 task embedding 映射到 7 维 latent：
+`DesignInitializer` 将 task embedding 映射到 5 维结构 latent：
 
 ```text
 u0 = initial_scale × tanh(network(task_embedding))
@@ -361,7 +361,7 @@ u0 = initial_scale × tanh(network(task_embedding))
 梯度先做 RMS 归一化，随后 GRU 预测：
 
 - 标量步长 `alpha`；
-- 7 维正对角预条件器 `diagonal`。
+- 5 维正对角预条件器 `diagonal`。
 
 更新规则：
 
@@ -609,13 +609,13 @@ python scripts\validate_gradients.py --backend pybamm --eps 1e-5
 |---|---|---|
 | `preference` | `[B]` 或 `[B,1]` | 能量–功率偏好 |
 | `task_embedding` | `[B,128]` | 任务表示 |
-| `latent` | `[B,7]` | 无约束设计 |
+| `latent` | `[B,5]` | 无约束结构设计 |
 | `physics_inputs` | `[B,8]` | PyBaMM 输入和电流 |
 | `trajectory` | `[B,O,T]` | 电压等轨迹 |
 | `jacobian` | `[B,O,T,8]` | 轨迹 sensitivity |
 | `grad_y` | `[B,O,T]` | loss 对轨迹的梯度 |
 | `grad_inputs` | `[B,8]` | loss 对物理输入的梯度 |
-| `grad_latent` | `[B,7]` | loss 对 latent 的梯度 |
+| `grad_latent` | `[B,5]` | loss 对 latent 的梯度 |
 | `loss` | `[B]` | 每个任务的标量损失 |
 
 完整链式法则为：

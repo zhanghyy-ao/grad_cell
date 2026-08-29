@@ -48,8 +48,8 @@ def main() -> None:
             x = torch.from_numpy(arrays["latent"].copy()).to(torch.float64)
             y = torch.from_numpy(arrays["targets"].copy()).to(torch.float64)
             metadata = json.loads(str(arrays["metadata"]))
-        if x.ndim != 2 or x.shape[1] != 7:
-            raise ValueError(f"Expected latent with shape [N, 7], got {tuple(x.shape)}")
+        if x.ndim != 2 or x.shape[1] != 5:
+            raise ValueError(f"Expected latent with shape [N, 5], got {tuple(x.shape)}")
         if y.ndim != 2 or len(y) != len(x):
             raise ValueError(
                 f"Expected targets with shape [N, K] matching latent, got {tuple(y.shape)}"
@@ -178,6 +178,7 @@ def main() -> None:
             {
                 "model": model.state_dict(),
                 "model_kwargs": {
+                    "input_dim": x.shape[1],
                     "output_dim": y.shape[1],
                     "hidden_dim": args.hidden_dim,
                     "depth": args.depth,

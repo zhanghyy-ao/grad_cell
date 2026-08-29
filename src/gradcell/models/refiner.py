@@ -8,7 +8,7 @@ class DiagonalPhysicsRefiner(nn.Module):
     def __init__(
         self,
         task_dim: int = 128,
-        latent_dim: int = 7,
+        latent_dim: int = 5,
         feature_dim: int = 5,
         hidden_dim: int = 128,
         max_step_size: float = 0.20,
@@ -46,4 +46,3 @@ class DiagonalPhysicsRefiner(nn.Module):
             self.diagonal_head(state)
         )
         return step, diagonal, state
-
