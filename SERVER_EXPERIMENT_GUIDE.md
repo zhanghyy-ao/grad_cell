@@ -67,6 +67,16 @@ NPZ 包含 5 维结构 latent、10 个解码后设计量、9 个监督标签和 
 
 ## 3. 训练并检验监督可学习性
 
+监督代理模型对训练集输出逐标签标准化，并最小化 9 个标签上的平均平方误差：
+
+```text
+y_norm,j = (y_j - mean_train,j) / std_train,j
+L = mean_batch,labels[(prediction_norm - y_norm)^2]
+```
+
+均值和标准差只由训练集计算。验证集使用同一损失选择最佳模型并执行 early
+stopping，测试集仅在训练结束后计算 MAE、RMSE 和 R2。
+
 ```bash
 python scripts/train_supervised_surrogate.py \
   --data data/chen2020_supervised.npz \
@@ -86,6 +96,24 @@ python scripts/train_supervised_surrogate.py \
 便于判断模型是否真正优于常数预测。
 
 测试集 R2 明显为正且 train/validation 曲线同步下降，说明当前随机设计分布下存在监督可学习性。若 R2 很低，应先扩大数据量、检查失败样本分布和预测散点图，不能直接解释为物理映射不可学习。
+
+## 4. 一条命令运行完整监督流程
+
+以下脚本依次运行单元测试、Ruff、Chen2020 数据生成、数据一致性检查、代理
+模型训练、checkpoint 回读以及测试预测检查：
+
+```bash
+CUDA_VISIBLE_DEVICES="" python scripts/run_supervised_pipeline.py \
+  --backend pybamm --model SPMe \
+  --samples 200 --simulation-batch-size 4 --time-points 101 \
+  --latent-std 1.25 --calibration-rate 0.1 --calibration-iterations 2 \
+  --epochs 300 --training-batch-size 32 \
+  --hidden-dim 64 --depth 2 --learning-rate 1e-3 --patience 40 \
+  --seed 7
+```
+
+如果输出路径已存在，需要更换路径或显式增加 `--overwrite`。成功后额外生成
+`pipeline_summary.json`，汇总有效样本数、失败率和测试集 R2。
 
 ## 推荐正式实验矩阵
 
