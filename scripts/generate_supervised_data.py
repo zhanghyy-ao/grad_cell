@@ -92,7 +92,15 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--latent-std", type=float, default=1.25)
     parser.add_argument("--time-points", type=int, default=151)
-    parser.add_argument("--current-ramp-time-s", type=float, default=1.0)
+    parser.add_argument(
+        "--current-ramp-time-s",
+        type=float,
+        default=0.0,
+        help=(
+            "Current ramp for physical labeling. Constant current (0, the default) "
+            "avoids DFN consistent-initialization failures."
+        ),
+    )
     parser.add_argument(
         "--capacity-calibration-rate",
         type=float,
