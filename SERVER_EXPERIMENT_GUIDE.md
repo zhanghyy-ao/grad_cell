@@ -78,6 +78,11 @@ python scripts/train_supervised_surrogate.py \
 - `metrics.json`：每个物理标签的测试 MAE、RMSE、R2；
 - `history.json`：训练及验证曲线原始数据；
 - `best_model.pt`：模型、结构、归一化参数和标签名。
+- `test_predictions.npz`：固定测试集索引、真实标签和预测值，用于复核和绘图。
+
+训练脚本会检查数据维度和有限值，保存可复现的数据划分索引，并在结束时重新
+加载 `best_model.pt` 核对预测完全一致。`metrics.json` 同时报告训练集均值基线，
+便于判断模型是否真正优于常数预测。
 
 测试集 R2 明显为正且 train/validation 曲线同步下降，说明当前随机设计分布下存在监督可学习性。若 R2 很低，应先扩大数据量、检查失败样本分布和预测散点图，不能直接解释为物理映射不可学习。
 

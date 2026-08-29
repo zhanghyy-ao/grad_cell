@@ -40,9 +40,27 @@ def main() -> None:
     with ExperimentRun("train_supervised_surrogate", args, run_dir=args.run_dir) as run:
         torch.set_default_dtype(torch.float64)
         torch.manual_seed(args.seed)
-        arrays = np.load(args.data, allow_pickle=False)
-        x = torch.from_numpy(arrays["latent"]).to(torch.float64)
-        y = torch.from_numpy(arrays["targets"]).to(torch.float64)
+        with np.load(args.data, allow_pickle=False) as arrays:
+            required = {"latent", "targets", "metadata"}
+            missing = required.difference(arrays.files)
+            if missing:
+                raise ValueError(f"Dataset is missing arrays: {sorted(missing)}")
+            x = torch.from_numpy(arrays["latent"].copy()).to(torch.float64)
+            y = torch.from_numpy(arrays["targets"].copy()).to(torch.float64)
+            metadata = json.loads(str(arrays["metadata"]))
+        if x.ndim != 2 or x.shape[1] != 7:
+            raise ValueError(f"Expected latent with shape [N, 7], got {tuple(x.shape)}")
+        if y.ndim != 2 or len(y) != len(x):
+            raise ValueError(
+                f"Expected targets with shape [N, K] matching latent, got {tuple(y.shape)}"
+            )
+        if not torch.isfinite(x).all() or not torch.isfinite(y).all():
+            raise ValueError("Dataset contains non-finite latent values or targets")
+        target_fields = metadata.get("target_fields")
+        if not isinstance(target_fields, list) or len(target_fields) != y.shape[1]:
+            raise ValueError(
+                "metadata.target_fields must be a list matching the target dimension"
+            )
         if len(x) < 20:
             raise ValueError("At least 20 valid samples are required for train/validation/test splits")
         run.log(f"loaded {len(x)} samples from {args.data}")
@@ -63,14 +81,14 @@ def main() -> None:
         )
 
         loader = DataLoader(
-        TensorDataset(x_norm[train_idx], y_norm[train_idx]),
-        batch_size=args.batch_size,
-        shuffle=True,
-        generator=torch.Generator().manual_seed(args.seed),
-    )
+            TensorDataset(x_norm[train_idx], y_norm[train_idx]),
+            batch_size=args.batch_size,
+            shuffle=True,
+            generator=torch.Generator().manual_seed(args.seed),
+        )
         model = Chen2020Surrogate(
-        output_dim=y.shape[1], hidden_dim=args.hidden_dim, depth=args.depth
-    ).double()
+            output_dim=y.shape[1], hidden_dim=args.hidden_dim, depth=args.depth
+        ).double()
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=args.learning_rate, weight_decay=1e-5
         )
@@ -128,34 +146,67 @@ def main() -> None:
         with torch.no_grad():
             prediction = model(x_norm[test_idx]) * y_std + y_mean
         metrics = regression_metrics(prediction, y[test_idx])
-        metadata = json.loads(str(arrays["metadata"]))
-        target_fields = metadata["target_fields"]
+        baseline = y_mean.expand_as(y[test_idx])
+        baseline_metrics = regression_metrics(baseline, y[test_idx])
         report = {
-        "data": str(args.data),
-        "samples": len(x),
-        "split_sizes": {
-            "train": len(train_idx), "validation": len(validation_idx), "test": len(test_idx)
-        },
-        "best_validation_standardized_mse": best_validation,
-        "epochs_trained": len(history),
-        "target_fields": target_fields,
-        "test_metrics": {
-            name: dict(zip(target_fields, values)) for name, values in metrics.items()
-        },
+            "data": str(args.data),
+            "samples": len(x),
+            "split_sizes": {
+                "train": len(train_idx),
+                "validation": len(validation_idx),
+                "test": len(test_idx),
+            },
+            "split_indices": {
+                "train": train_idx.tolist(),
+                "validation": validation_idx.tolist(),
+                "test": test_idx.tolist(),
+            },
+            "best_validation_standardized_mse": best_validation,
+            "epochs_trained": len(history),
+            "target_fields": target_fields,
+            "test_metrics": {
+                name: dict(zip(target_fields, values)) for name, values in metrics.items()
+            },
+            "train_mean_baseline_test_metrics": {
+                name: dict(zip(target_fields, values))
+                for name, values in baseline_metrics.items()
+            },
         }
         args.output_dir.mkdir(parents=True, exist_ok=True)
+        model_path = args.output_dir / "best_model.pt"
         torch.save(
-        {
-            "model": model.state_dict(),
-            "model_kwargs": {
-                "output_dim": y.shape[1], "hidden_dim": args.hidden_dim, "depth": args.depth
+            {
+                "model": model.state_dict(),
+                "model_kwargs": {
+                    "output_dim": y.shape[1],
+                    "hidden_dim": args.hidden_dim,
+                    "depth": args.depth,
+                },
+                "normalization": {
+                    "x_mean": x_mean,
+                    "x_std": x_std,
+                    "y_mean": y_mean,
+                    "y_std": y_std,
+                },
+                "target_fields": target_fields,
+                "split_indices": report["split_indices"],
             },
-            "normalization": {
-                "x_mean": x_mean, "x_std": x_std, "y_mean": y_mean, "y_std": y_std
-            },
-            "target_fields": target_fields,
-        },
-        args.output_dir / "best_model.pt",
+            model_path,
+        )
+        checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
+        reloaded_model = Chen2020Surrogate(**checkpoint["model_kwargs"]).double()
+        reloaded_model.load_state_dict(checkpoint["model"])
+        reloaded_model.eval()
+        with torch.no_grad():
+            reloaded_prediction = reloaded_model(x_norm[test_idx]) * y_std + y_mean
+        if not torch.equal(prediction, reloaded_prediction):
+            raise RuntimeError("Reloaded checkpoint predictions do not match saved model")
+        np.savez_compressed(
+            args.output_dir / "test_predictions.npz",
+            indices=test_idx.numpy(),
+            targets=y[test_idx].numpy(),
+            predictions=prediction.numpy(),
+            target_fields=np.asarray(target_fields),
         )
         (args.output_dir / "metrics.json").write_text(
             json.dumps(report, indent=2), encoding="utf-8"
@@ -167,9 +218,10 @@ def main() -> None:
             {
                 "result": report,
                 "artifacts": {
-                    "model": str(args.output_dir / "best_model.pt"),
+                    "model": str(model_path),
                     "metrics": str(args.output_dir / "metrics.json"),
                     "history": str(args.output_dir / "history.json"),
+                    "test_predictions": str(args.output_dir / "test_predictions.npz"),
                 },
             }
         )
