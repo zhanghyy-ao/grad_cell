@@ -87,7 +87,7 @@ def main() -> None:
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
-                train_loss_sum += float(loss) * len(features)
+                train_loss_sum += float(loss.detach()) * len(features)
             model.eval()
             with torch.no_grad():
                 validation_loss = float(

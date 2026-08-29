@@ -32,11 +32,17 @@ done
 
 ## 2. 生成 Chen2020 监督数据
 
+PyBaMM 数据生成采用两阶段物理流程：先以低倍率放电至 2.5 V 截止，标定每个
+设计的参考容量；再以该参考容量定义 1C/3C 电流，并按实际截止时间积分容量、
+能量和功率。正常触发最低电压事件属于有效物理结果，只有求解异常、非有限输出
+或在最大时域内未达到截止电压才会进入失败诊断。
+
 先做冒烟测试：
 
 ```bash
 python scripts/generate_supervised_data.py \
-  --backend pybamm --samples 20 --batch-size 2 \
+  --backend pybamm --model SPMe --samples 20 --batch-size 2 \
+  --capacity-calibration-rate 0.1 --capacity-calibration-iterations 2 \
   --output data/chen2020_smoke.npz
 ```
 
@@ -51,7 +57,10 @@ nohup python scripts/generate_supervised_data.py \
 tail -f results/logs/generate_supervised.log
 ```
 
-NPZ 包含 7 维 latent、10 个解码后设计量、4 个监督标签和 JSON metadata。标签是 1C 比能量、3C 比功率、1C/3C 平滑最低电压。失败样本不会进入训练集，其索引写入同名 JSON。
+NPZ 包含 7 维 latent、10 个解码后设计量、9 个监督标签和 JSON metadata。
+标签包括低倍率参考容量、1C/3C 实际容量、1C 比能量、3C 比功率、1C/3C
+平均放电电压和实际放电时间。失败样本不会进入训练集；索引及容量标定、1C、3C
+三个阶段的终止原因写入同名 JSON。
 
 ## 3. 训练并检验监督可学习性
 

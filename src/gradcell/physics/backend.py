@@ -16,6 +16,51 @@ class PhysicsBatch:
     runtime_s: np.ndarray # 每个样本的求解时间
 
 
+@dataclass(frozen=True)
+class DischargeBatch:
+    """Non-differentiable physical-discharge summaries for supervised labels."""
+
+    delivered_capacity_ah: np.ndarray
+    delivered_energy_wh: np.ndarray
+    average_voltage_v: np.ndarray
+    minimum_voltage_v: np.ndarray
+    discharge_time_s: np.ndarray
+    status: np.ndarray
+    runtime_s: np.ndarray
+
+
+def summarize_discharge(
+    time_s: np.ndarray,
+    voltage_v: np.ndarray,
+    current_a: np.ndarray,
+) -> dict[str, float]:
+    """Integrate a discharge trajectory using its actual termination time."""
+    time_s = np.asarray(time_s, dtype=np.float64).reshape(-1)
+    voltage_v = np.asarray(voltage_v, dtype=np.float64).reshape(-1)
+    current_a = np.asarray(current_a, dtype=np.float64).reshape(-1)
+    if not (time_s.size == voltage_v.size == current_a.size) or time_s.size < 2:
+        raise ValueError("Discharge trajectory arrays must have the same length >= 2")
+    if not (
+        np.isfinite(time_s).all()
+        and np.isfinite(voltage_v).all()
+        and np.isfinite(current_a).all()
+    ):
+        raise ValueError("Discharge trajectory contains non-finite values")
+    discharge_current = np.clip(current_a, 0.0, None)
+    integrate = getattr(np, "trapezoid", None)
+    if integrate is None:
+        integrate = np.trapz
+    capacity_ah = float(integrate(discharge_current, time_s) / 3600.0)
+    energy_wh = float(integrate(discharge_current * voltage_v, time_s) / 3600.0)
+    return {
+        "delivered_capacity_ah": capacity_ah,
+        "delivered_energy_wh": energy_wh,
+        "average_voltage_v": energy_wh / max(capacity_ah, 1e-12),
+        "minimum_voltage_v": float(voltage_v.min()),
+        "discharge_time_s": float(time_s[-1] - time_s[0]),
+    }
+
+
 class PhysicsBackend(Protocol):
     """所有物理后端必须实现的最小求解接口。"""
 
@@ -127,6 +172,7 @@ class PyBaMMBackend:
         atol: float = 1e-8,
         calculate_sensitivities: bool = True,
         current_ramp_time_s: float = 1.0,
+        physical_voltage_cutoffs: bool = False,
     ) -> None:
         # 延迟导入 PyBaMM，使 toy 后端和基础测试不依赖该可选依赖。
         try:
@@ -141,15 +187,16 @@ class PyBaMMBackend:
         model_cls = getattr(pybamm.lithium_ion, model_name)
         self.model = model_cls()
         self.parameters = pybamm.ParameterValues(parameter_set)
-        # Training uses a fixed horizon and a smooth voltage gate in PyTorch.
-        # Move hard voltage events away from the operating region so their event
-        # time does not create missing trajectory tails or discontinuous gradients.
-        self.parameters.update(
-            {
-                "Lower voltage cut-off [V]": 0.0,
-                "Upper voltage cut-off [V]": 10.0,
-            }
-        )
+        self.physical_voltage_cutoffs = physical_voltage_cutoffs
+        if not physical_voltage_cutoffs:
+            # Differentiable training uses a fixed horizon and a smooth voltage gate.
+            # Physical supervised runs retain the parameter-set voltage events.
+            self.parameters.update(
+                {
+                    "Lower voltage cut-off [V]": 0.0,
+                    "Upper voltage cut-off [V]": 10.0,
+                }
+            )
         direct_inputs = self.input_names[:5]
         for name in direct_inputs:
             # 将孔隙率、活性比例和电流暴露为运行时输入。
@@ -317,6 +364,89 @@ class PyBaMMBackend:
         return PhysicsBatch(
             trajectories=np.stack(trajectories),
             jacobian=np.stack(jacobians),
+            status=np.asarray(statuses, dtype=np.int64),
+            runtime_s=np.asarray(runtimes, dtype=np.float64),
+        )
+
+    def solve_discharge_batch(self, inputs: np.ndarray) -> DischargeBatch:
+        """Run to a physical cutoff and summarize delivered capacity and energy.
+
+        A minimum-voltage event is a successful physical outcome here. This path
+        is non-differentiable and intended for capacity calibration and labels.
+        """
+        if not self.physical_voltage_cutoffs:
+            raise RuntimeError(
+                "solve_discharge_batch requires physical_voltage_cutoffs=True"
+            )
+        import time
+
+        capacities, energies, average_voltages = [], [], []
+        minimum_voltages, durations, statuses, runtimes, diagnostics = [], [], [], [], []
+        for row in np.asarray(inputs, dtype=np.float64):
+            started = time.perf_counter()
+            try:
+                input_dict = dict(zip(self.input_names, row.tolist()))
+                solution = self.simulation.solve(
+                    self.t_eval,
+                    inputs=input_dict,
+                    calculate_sensitivities=False,
+                )
+                time_values = np.asarray(solution.t, dtype=np.float64).reshape(-1)
+                voltage_values = np.asarray(
+                    solution["Voltage [V]"].entries, dtype=np.float64
+                ).reshape(-1)
+                current_values = np.asarray(
+                    solution["Current [A]"].entries, dtype=np.float64
+                ).reshape(-1)
+                summary = summarize_discharge(time_values, voltage_values, current_values)
+                termination = str(getattr(solution, "termination", "unknown"))
+                reached_voltage_cutoff = "minimum voltage" in termination.lower()
+                valid = (
+                    summary["delivered_capacity_ah"] > 0.0
+                    and summary["discharge_time_s"] > 0.0
+                )
+                capacities.append(summary["delivered_capacity_ah"])
+                energies.append(summary["delivered_energy_wh"])
+                average_voltages.append(summary["average_voltage_v"])
+                minimum_voltages.append(summary["minimum_voltage_v"])
+                durations.append(summary["discharge_time_s"])
+                statuses.append(int(valid))
+                diagnostics.append(
+                    {
+                        **summary,
+                        "requested_end_time_s": self.horizon_s,
+                        "actual_end_time_s": float(time_values[-1]),
+                        "reached_voltage_cutoff": reached_voltage_cutoff,
+                        "termination": termination,
+                        "current_ramp_time_s": self.current_ramp_time_s,
+                        "error": None,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                capacities.append(0.0)
+                energies.append(0.0)
+                average_voltages.append(0.0)
+                minimum_voltages.append(0.0)
+                durations.append(0.0)
+                statuses.append(0)
+                diagnostics.append(
+                    {
+                        "requested_end_time_s": self.horizon_s,
+                        "actual_end_time_s": None,
+                        "reached_voltage_cutoff": False,
+                        "termination": "exception",
+                        "current_ramp_time_s": self.current_ramp_time_s,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+            runtimes.append(time.perf_counter() - started)
+        self.last_solve_diagnostics = diagnostics
+        return DischargeBatch(
+            delivered_capacity_ah=np.asarray(capacities, dtype=np.float64),
+            delivered_energy_wh=np.asarray(energies, dtype=np.float64),
+            average_voltage_v=np.asarray(average_voltages, dtype=np.float64),
+            minimum_voltage_v=np.asarray(minimum_voltages, dtype=np.float64),
+            discharge_time_s=np.asarray(durations, dtype=np.float64),
             status=np.asarray(statuses, dtype=np.int64),
             runtime_s=np.asarray(runtimes, dtype=np.float64),
         )
