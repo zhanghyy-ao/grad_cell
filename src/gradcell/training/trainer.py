@@ -85,7 +85,16 @@ def train(
                 ]
             ).mean()
             loss = loss + 0.5 * monotonic + 1e-3 * step_penalty
+        if not torch.isfinite(loss):
+            raise FloatingPointError(
+                f"Non-finite training loss detected at step {iteration}: {loss.detach()}"
+            )
         loss.backward()
+        for name, parameter in model.named_parameters():
+            if parameter.grad is not None and not torch.isfinite(parameter.grad).all():
+                raise FloatingPointError(
+                    f"Non-finite gradient detected in {name!r} at step {iteration}"
+                )
         torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
         optimizer.step()
         losses.append(float(loss.detach()))

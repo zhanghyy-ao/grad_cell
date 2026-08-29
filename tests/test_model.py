@@ -1,7 +1,32 @@
+import numpy as np
 import torch
 
 from gradcell.models import GradCell
 from gradcell.physics import AnalyticToyBackend, DifferentiablePhysicsLayer
+from gradcell.physics.backend import PhysicsBatch
+
+
+class ControlledFailureBackend:
+    def __init__(self, fail_all: bool = False):
+        self.fail_all = fail_all
+
+    def solve_batch(self, inputs: np.ndarray) -> PhysicsBatch:
+        batch_size, parameter_count = inputs.shape
+        trajectories = np.full((batch_size, 1, 11), 3.7, dtype=np.float64)
+        jacobian = np.full(
+            (batch_size, 1, 11, parameter_count), 1e-3, dtype=np.float64
+        )
+        status = np.ones(batch_size, dtype=np.int64)
+        failed = np.ones(batch_size, dtype=bool) if self.fail_all else np.arange(batch_size) == 1
+        trajectories[failed] = np.nan
+        jacobian[failed] = 0.0
+        status[failed] = 0
+        return PhysicsBatch(
+            trajectories=trajectories,
+            jacobian=jacobian,
+            status=status,
+            runtime_s=np.zeros(batch_size, dtype=np.float64),
+        )
 
 
 def test_gradcell_k0_backward():
@@ -30,3 +55,37 @@ def test_gradcell_refinement_runs():
     assert len(output.steps) == 2
     assert torch.isfinite(output.final.loss).all()
 
+
+def test_failed_sample_does_not_contaminate_valid_sample():
+    model = GradCell(
+        DifferentiablePhysicsLayer(ControlledFailureBackend()),
+        DifferentiablePhysicsLayer(ControlledFailureBackend()),
+    ).double()
+    latent = torch.full((2, 7), 0.2, dtype=torch.float64, requires_grad=True)
+    step = model.evaluate(latent, torch.tensor([0.3, 0.7], dtype=torch.float64))
+
+    assert step.status.tolist() == [1, 0]
+    assert torch.isfinite(step.loss).all()
+    assert torch.isfinite(step.energy).all()
+    assert torch.isfinite(step.power).all()
+    assert step.energy[1] == 0.0
+    assert step.power[1] == 0.0
+
+    step.loss.sum().backward()
+    assert latent.grad is not None
+    assert torch.isfinite(latent.grad).all()
+
+
+def test_all_failed_batch_has_finite_loss_and_gradient():
+    model = GradCell(
+        DifferentiablePhysicsLayer(ControlledFailureBackend(fail_all=True)),
+        DifferentiablePhysicsLayer(ControlledFailureBackend(fail_all=True)),
+    ).double()
+    latent = torch.full((2, 7), 0.2, dtype=torch.float64, requires_grad=True)
+    step = model.evaluate(latent, torch.tensor([0.3, 0.7], dtype=torch.float64))
+
+    assert step.status.tolist() == [0, 0]
+    assert torch.isfinite(step.loss).all()
+    step.loss.sum().backward()
+    assert latent.grad is not None
+    assert torch.isfinite(latent.grad).all()

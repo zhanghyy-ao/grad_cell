@@ -264,16 +264,30 @@ class PyBaMMBackend:
                         sensitivity_rows.append(
                             np.zeros((self.t_eval.size, len(self.input_names)), dtype=np.float64)
                         )
-                trajectories.append(np.stack(output_rows, axis=0))
-                jacobians.append(np.stack(sensitivity_rows, axis=0))
-                statuses.append(1)
+                trajectory = np.stack(output_rows, axis=0)
+                jacobian = np.stack(sensitivity_rows, axis=0)
+                completed_horizon = actual_end_time_s >= self.horizon_s - 1e-8
+                trajectory_finite = bool(np.isfinite(trajectory).all())
+                jacobian_finite = bool(np.isfinite(jacobian).all())
+                success = completed_horizon and trajectory_finite and (
+                    not self.calculate_sensitivities or jacobian_finite
+                )
+                if success:
+                    trajectories.append(trajectory)
+                    jacobians.append(jacobian)
+                else:
+                    # Finite placeholders cross into PyTorch, but status=0 prevents
+                    # callers from treating them as physical labels.
+                    trajectories.append(np.zeros_like(trajectory))
+                    jacobians.append(np.zeros_like(jacobian))
+                statuses.append(int(success))
                 diagnostics.append(
                     {
                         "requested_end_time_s": self.horizon_s,
                         "actual_end_time_s": actual_end_time_s,
-                        "completed_requested_horizon": bool(
-                            actual_end_time_s >= self.horizon_s - 1e-8
-                        ),
+                        "completed_requested_horizon": bool(completed_horizon),
+                        "trajectory_finite": trajectory_finite,
+                        "jacobian_finite": jacobian_finite,
                         "termination": str(getattr(solution, "termination", "unknown")),
                         "current_ramp_time_s": self.current_ramp_time_s,
                         "error": None,
@@ -283,7 +297,7 @@ class PyBaMMBackend:
             # into status=0 and let the PyTorch loss apply a recovery barrier.
             except Exception as exc:  # noqa: BLE001
                 shape = (len(self.output_variables), self.t_eval.size)
-                trajectories.append(np.full(shape, np.nan, dtype=np.float64))
+                trajectories.append(np.zeros(shape, dtype=np.float64))
                 jacobians.append(np.zeros((*shape, len(self.input_names)), dtype=np.float64))
                 statuses.append(0)
                 diagnostics.append(
@@ -291,6 +305,8 @@ class PyBaMMBackend:
                         "requested_end_time_s": self.horizon_s,
                         "actual_end_time_s": None,
                         "completed_requested_horizon": False,
+                        "trajectory_finite": False,
+                        "jacobian_finite": False,
                         "termination": "exception",
                         "current_ramp_time_s": self.current_ramp_time_s,
                         "error": f"{type(exc).__name__}: {exc}",

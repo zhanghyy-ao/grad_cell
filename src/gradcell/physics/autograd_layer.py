@@ -34,6 +34,8 @@ class _PhysicsFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_y, grad_status, grad_runtime):
         (jacobian,) = ctx.saved_tensors
+        grad_y = torch.nan_to_num(grad_y, nan=0.0, posinf=0.0, neginf=0.0)
+        jacobian = torch.nan_to_num(jacobian, nan=0.0, posinf=0.0, neginf=0.0)
         # grad_y 形状为 [B,O,T]，Jacobian 形状为 [B,O,T,P]；
         # 对输出维和时间维求和，得到 loss 对 P 个物理输入的梯度。
         grad_inputs = torch.einsum("bot,botp->bp", grad_y, jacobian)
