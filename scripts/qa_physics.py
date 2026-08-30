@@ -312,7 +312,7 @@ def run_case(
         record["passed"] = bool(
             all(item.get("passed", False) for item in checks.values())
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         LOGGER.exception("Case %s failed", case.case_id)
         record["passed"] = False
         record["error"] = f"{type(exc).__name__}: {exc}"

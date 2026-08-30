@@ -2,6 +2,10 @@
 
 GradCell 是一个面向电芯逆向设计的研究原型。模型接收能量与功率之间的连续性能偏好，先预测一个满足制造约束的电芯设计，再读取 PyBaMM 提供的一阶物理敏感度，用少量梯度更新进一步改善设计。
 
+当前同时提供一条独立的第一版电解液实验路线：固定 Chen2020 电极与结构，使用 CALiSol-23 监督预测离子电导率，并将预测值作为电解液电导率倍率接入 PyBaMM DFN。DFN 电压 loss 通过 IDAKLU sensitivity 和自定义 `Jᵀv` 回传到性质网络。详细流程见 `docs/第一版_固定材料电解液性质_DFN端到端实验流程.md`。
+
+服务器一键入口：`SEED=7 PHYSICS_SAMPLES=32 EPOCHS=100 bash scripts/run_electrolyte_v1_server.sh`。
+
 本仓库目前实现的是第一阶段 MVP，重点验证以下完整链路：
 
 ```text

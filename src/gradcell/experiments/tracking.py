@@ -10,7 +10,7 @@ import uuid
 from argparse import Namespace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 
 def _json_default(value: Any) -> Any:
@@ -67,7 +67,7 @@ class ExperimentRun:
         root: str | Path = "results/runs",
         run_dir: str | Path | None = None,
     ) -> None:
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")
         run_id = f"{timestamp}_{experiment}_{uuid.uuid4().hex[:8]}"
         self.experiment = experiment
         self.run_id = run_id
@@ -102,7 +102,7 @@ class ExperimentRun:
         _write_json(self.path / "metadata.json", self.metadata)
         self.event("run_started", run_dir=str(self.path))
 
-    def __enter__(self) -> ExperimentRun:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, _traceback) -> bool:

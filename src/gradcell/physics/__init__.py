@@ -2,11 +2,19 @@
 
 from .autograd_layer import DifferentiablePhysicsLayer
 from .backend import AnalyticToyBackend, DischargeBatch, PyBaMMBackend, summarize_discharge
+from .electrolyte_dfn import (
+    AnalyticElectrolyteBackend,
+    HardCutoffResult,
+    PyBaMMElectrolyteDFNBackend,
+)
 
 __all__ = [
+    "AnalyticElectrolyteBackend",
     "AnalyticToyBackend",
     "DifferentiablePhysicsLayer",
     "DischargeBatch",
+    "HardCutoffResult",
     "PyBaMMBackend",
+    "PyBaMMElectrolyteDFNBackend",
     "summarize_discharge",
 ]
