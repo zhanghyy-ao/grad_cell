@@ -8,31 +8,29 @@ from urllib.request import urlretrieve
 import numpy as np
 import pandas as pd
 
+from gradcell.data import MOLE_FRACTION_COLUMNS, SOLVENT_COLUMNS, clean_calisol23_frame
 from gradcell.physics import (
     AnalyticElectrolyteBackend,
     PyBaMMElectrolyteDFNBackend,
 )
 
 CALISOL23_URL = "https://ndownloader.figshare.com/files/43151344"
-SOLVENT_COLUMNS = (
-    "EC", "PC", "DMC", "EMC", "DEC", "DME", "DMSO", "AN", "MOEMC", "TFP",
-    "EA", "MA", "FEC", "DOL", "2-MeTHF", "DMM", "Freon 11",
-    "Methylene chloride", "THF", "Toluene", "Sulfolane", "2-Glyme", "3-Glyme",
-    "4-Glyme", "3-Me-2-Oxazolidinone", "3-MeSulfolane", "Ethyldiglyme", "DMF",
-    "Ethylbenzene", "Ethylmonoglyme", "Benzene", "g-Butyrolactone", "Cumene",
-    "Propylsulfone", "Pseudocumeme", "TEOS", "m-Xylene", "o-Xylene",
-)
 
 
 def build_features(frame: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
-    continuous = frame.loc[:, ["T", "c", *SOLVENT_COLUMNS]].astype(np.float64)
+    continuous = frame.loc[:, ["T", "c", *MOLE_FRACTION_COLUMNS]].astype(np.float64)
     categories = pd.get_dummies(
-        frame.loc[:, ["salt", "c units", "solvent ratio type"]].fillna("unknown"),
-        prefix=("salt", "concentration_unit", "ratio_type"),
+        frame.loc[:, ["salt_canonical", "c units"]].fillna("unknown"),
+        prefix=("salt", "concentration_unit"),
         dtype=np.float64,
     )
     matrix = np.concatenate([continuous.to_numpy(), categories.to_numpy()], axis=1)
-    names = ["temperature_k", "salt_concentration", *SOLVENT_COLUMNS, *categories.columns]
+    names = [
+        "temperature_k",
+        "salt_concentration",
+        *[f"mole_fraction_{name}" for name in SOLVENT_COLUMNS],
+        *categories.columns,
+    ]
     return matrix, names
 
 
@@ -55,13 +53,8 @@ def main() -> None:
         args.csv.parent.mkdir(parents=True, exist_ok=True)
         print(f"Downloading CALiSol-23 to {args.csv}", flush=True)
         urlretrieve(CALISOL23_URL, args.csv)
-    frame = pd.read_csv(args.csv, index_col=0)
-    required = {"doi", "k", "T", "c", "salt", "c units", "solvent ratio type", *SOLVENT_COLUMNS}
-    missing = required.difference(frame.columns)
-    if missing:
-        raise ValueError(f"CALiSol-23 file is missing columns: {sorted(missing)}")
-    finite = np.isfinite(frame["k"]) & np.isfinite(frame["T"]) & np.isfinite(frame["c"])
-    frame = frame.loc[finite & (frame["k"] > 0.0)].reset_index(drop=True)
+    cleaning = clean_calisol23_frame(pd.read_csv(args.csv))
+    frame = cleaning.model_v1
     features, feature_names = build_features(frame)
     target_log_k = np.log(frame["k"].to_numpy(dtype=np.float64))
     groups, group_names = pd.factorize(frame["doi"].astype(str), sort=True)
@@ -114,6 +107,7 @@ def main() -> None:
         "probe_horizon_s": args.probe_horizon_s,
         "time_points": args.time_points,
         "seed": args.seed,
+        "cleaning": cleaning.report,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(

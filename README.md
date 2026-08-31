@@ -6,6 +6,17 @@ GradCell 是一个面向电芯逆向设计的研究原型。模型接收能量�
 
 服务器一键入口：`SEED=7 PHYSICS_SAMPLES=32 EPOCHS=100 bash scripts/run_electrolyte_v1_server.sh`。
 
+正式准备数据前先执行可追溯清洗：
+
+```bash
+PYTHONPATH=src python scripts/clean_calisol23.py --overwrite
+```
+
+该命令生成全量规范化表 `data/calisol23_canonical.csv`、第一版训练表
+`data/calisol23_model_v1.csv` 和审计记录 `data/calisol23_cleaning_report.json`。
+`prepare_electrolyte_v1_data.py` 也会在内存中应用相同规则，不再把负浓度、缺失标签
+或数值零直接送入 log-conductivity 回归。
+
 本仓库目前实现的是第一阶段 MVP，重点验证以下完整链路：
 
 ```text
