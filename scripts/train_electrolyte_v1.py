@@ -83,30 +83,35 @@ def main() -> None:
         shuffle=True,
         generator=torch.Generator().manual_seed(args.seed),
     )
+    use_physics = args.physics_weight > 0.0
     train_physics_np = train_idx_np[physics_mask[train_idx_np]]
-    if len(train_physics_np) == 0:
+    if use_physics and len(train_physics_np) == 0:
         raise RuntimeError("No physics-supervised rows fell in the training split")
     train_physics = torch.from_numpy(train_physics_np)
-    physics_loader = DataLoader(
-        TensorDataset(
-            normalized[train_physics],
-            target_voltage[train_physics],
-            current_a[train_physics],
-        ),
-        batch_size=args.physics_batch_size,
-        shuffle=True,
-        generator=torch.Generator().manual_seed(args.seed + 1),
-    )
-    backend_cls = (
-        PyBaMMElectrolyteDFNBackend
-        if args.physics_backend == "dfn"
-        else AnalyticElectrolyteBackend
-    )
-    backend = backend_cls(
-        time_points=metadata["time_points"],
-        probe_horizon_s=metadata["probe_horizon_s"],
-    )
-    physics_layer = DifferentiablePhysicsLayer(backend)
+    physics_loader = None
+    backend = None
+    physics_layer = None
+    if use_physics:
+        physics_loader = DataLoader(
+            TensorDataset(
+                normalized[train_physics],
+                target_voltage[train_physics],
+                current_a[train_physics],
+            ),
+            batch_size=args.physics_batch_size,
+            shuffle=True,
+            generator=torch.Generator().manual_seed(args.seed + 1),
+        )
+        backend_cls = (
+            PyBaMMElectrolyteDFNBackend
+            if args.physics_backend == "dfn"
+            else AnalyticElectrolyteBackend
+        )
+        backend = backend_cls(
+            time_points=metadata["time_points"],
+            probe_horizon_s=metadata["probe_horizon_s"],
+        )
+        physics_layer = DifferentiablePhysicsLayer(backend)
     model = ElectrolytePropertyNetwork(
         input_dim=features.shape[1], hidden_dim=args.hidden_dim, depth=args.depth
     ).double()
@@ -119,30 +124,38 @@ def main() -> None:
 
     for epoch in range(1, args.epochs + 1):
         model.train()
-        physics_iterator = iter(physics_loader)
+        physics_iterator = iter(physics_loader) if physics_loader is not None else None
         property_sum = physics_sum = total_sum = 0.0
         updates = 0
         for property_x, property_y in property_loader:
-            try:
-                physics_x, voltage_y, physics_current = next(physics_iterator)
-            except StopIteration:
-                physics_iterator = iter(physics_loader)
-                physics_x, voltage_y, physics_current = next(physics_iterator)
             predicted_standardized_log_k = model(property_x)
             property_loss = torch.nn.functional.huber_loss(
                 predicted_standardized_log_k, property_y
             )
-            predicted_physics_log_k = model(physics_x) * target_std + target_mean
-            physics_inputs = torch.stack(
-                [predicted_physics_log_k - reference_log_k, physics_current], dim=-1
-            )
-            predicted_voltage, status, _ = physics_layer(physics_inputs)
-            if not bool((status == 1).all()):
-                raise RuntimeError(f"Online physics batch failed: {backend.last_solve_diagnostics}")
-            voltage_loss = torch.nn.functional.huber_loss(
-                predicted_voltage[:, 0] / args.voltage_scale_v,
-                voltage_y / args.voltage_scale_v,
-            )
+            voltage_loss = property_loss.new_zeros(())
+            if use_physics:
+                assert physics_iterator is not None
+                assert physics_loader is not None
+                assert physics_layer is not None
+                assert backend is not None
+                try:
+                    physics_x, voltage_y, physics_current = next(physics_iterator)
+                except StopIteration:
+                    physics_iterator = iter(physics_loader)
+                    physics_x, voltage_y, physics_current = next(physics_iterator)
+                predicted_physics_log_k = model(physics_x) * target_std + target_mean
+                physics_inputs = torch.stack(
+                    [predicted_physics_log_k - reference_log_k, physics_current], dim=-1
+                )
+                predicted_voltage, status, _ = physics_layer(physics_inputs)
+                if not bool((status == 1).all()):
+                    raise RuntimeError(
+                        f"Online physics batch failed: {backend.last_solve_diagnostics}"
+                    )
+                voltage_loss = torch.nn.functional.huber_loss(
+                    predicted_voltage[:, 0] / args.voltage_scale_v,
+                    voltage_y / args.voltage_scale_v,
+                )
             loss = property_loss + args.physics_weight * voltage_loss
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -177,7 +190,10 @@ def main() -> None:
         print(json.dumps(record), flush=True)
         if validation_loss < best_validation:
             best_validation = validation_loss
-            best_state = {key: value.detach().cpu().clone() for key, value in model.state_dict().items()}
+            best_state = {
+                key: value.detach().cpu().clone()
+                for key, value in model.state_dict().items()
+            }
             stale_epochs = 0
         else:
             stale_epochs += 1
@@ -199,6 +215,7 @@ def main() -> None:
             "test": len(test_idx),
         },
         "physics_train_rows": len(train_physics),
+        "online_physics_enabled": use_physics,
         "physics_weight": args.physics_weight,
         "target_standardization": {
             "mean_log_ms_cm": float(target_mean),

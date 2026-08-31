@@ -5,9 +5,10 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 SEED="${SEED:-7}"
 PHYSICS_SAMPLES="${PHYSICS_SAMPLES:-32}"
 EPOCHS="${EPOCHS:-100}"
+PHYSICS_WEIGHTS="${PHYSICS_WEIGHTS:-0 0.1 1 2 5}"
 RUN_NAME="${RUN_NAME:-electrolyte_v1_dfn_s${SEED}}"
 DATA_PATH="data/${RUN_NAME}.npz"
-RESULT_DIR="results/${RUN_NAME}"
+RESULT_ROOT="results/${RUN_NAME}"
 
 export PYTHONPATH="${PYTHONPATH:-src}"
 
@@ -39,15 +40,20 @@ for eps_value in 1e-3 3e-4 1e-4 3e-5 1e-5; do
     --eps "${eps_value}"
 done
 
-echo "[5/5] Joint property + online DFN training"
-"${PYTHON_BIN}" scripts/train_electrolyte_v1.py \
-  --data "${DATA_PATH}" \
-  --physics-backend dfn \
-  --epochs "${EPOCHS}" \
-  --batch-size 256 \
-  --physics-batch-size 2 \
-  --physics-weight 1.0 \
-  --seed "${SEED}" \
-  --output-dir "${RESULT_DIR}"
+echo "[5/5] Property + online DFN weight sweep: ${PHYSICS_WEIGHTS}"
+for physics_weight in ${PHYSICS_WEIGHTS}; do
+  weight_slug="${physics_weight//-/m}"
+  weight_slug="${weight_slug//./p}"
+  result_dir="${RESULT_ROOT}/weight_${weight_slug}"
+  "${PYTHON_BIN}" scripts/train_electrolyte_v1.py \
+    --data "${DATA_PATH}" \
+    --physics-backend dfn \
+    --epochs "${EPOCHS}" \
+    --batch-size 256 \
+    --physics-batch-size 2 \
+    --physics-weight "${physics_weight}" \
+    --seed "${SEED}" \
+    --output-dir "${result_dir}"
+done
 
-echo "Completed: ${RESULT_DIR}"
+echo "Completed: ${RESULT_ROOT}"
