@@ -4,6 +4,21 @@ GradCell 是一个面向电芯逆向设计的研究原型。模型接收能量�
 
 当前同时提供一条独立的第一版电解液实验路线：固定 Chen2020 电极与结构，使用 CALiSol-23 监督预测离子电导率，并将预测值作为电解液电导率倍率接入 PyBaMM DFN。DFN 电压 loss 通过 IDAKLU sensitivity 和自定义 `Jᵀv` 回传到性质网络。详细流程见 `docs/第一版_固定材料电解液性质_DFN端到端实验流程.md`。
 
+另外提供独立的 DFN 逆参数 benchmark 生成器。它参考 Battery-Sim-Agent 的
+单参数/多参数扰动、失败过滤和 benchmark case 设计，但由 GradCell 独立实现：
+
+```bash
+PYTHONPATH=src python scripts/generate_dfn_parameter_benchmark.py \
+  --family single --samples 100 --candidate-factor 5 \
+  --c-rates 0.5,1,2 --seed 7 \
+  --output data/dfn_parameter_benchmark_single_s7.npz
+```
+
+生成器要求 DFN 正常到达最低电压截止，过滤与 nominal Chen2020 在容量和曲线形状上
+几乎不可区分的案例，并同时保存 `.npz`、可读的 `.yaml` case 配置及包含全部失败原因的
+`.json` audit。电压曲线按实际放电过程归一化到 `[0, 1]`，实际截止时间和放电容量另存，
+因此不会把不同样本错误地当成固定放电时长。`--family multi` 可生成 2–4 参数联合扰动。
+
 服务器一键入口：`SEED=7 PHYSICS_SAMPLES=32 EPOCHS=100 bash scripts/run_electrolyte_v1_server.sh`。
 
 正式准备数据前先执行可追溯清洗：

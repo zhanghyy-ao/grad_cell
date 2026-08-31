@@ -29,6 +29,18 @@ class DischargeBatch:
     runtime_s: np.ndarray
 
 
+@dataclass(frozen=True)
+class NormalizedDischargeBatch:
+    """Physical-cutoff discharge curves resampled on normalized cycle time."""
+
+    normalized_time: np.ndarray
+    voltage_v: np.ndarray
+    discharge_time_s: np.ndarray
+    delivered_capacity_ah: np.ndarray
+    status: np.ndarray
+    runtime_s: np.ndarray
+
+
 def summarize_discharge(
     time_s: np.ndarray,
     voltage_v: np.ndarray,
@@ -198,6 +210,10 @@ class PyBaMMBackend:
                 }
             )
         direct_inputs = self.input_names[:5]
+        self.nominal_input_values = np.asarray(
+            [float(self.parameters[name]) for name in direct_inputs] + [1.0, 1.0],
+            dtype=np.float64,
+        )
         for name in direct_inputs:
             # 将孔隙率、活性比例和电流暴露为运行时输入。
             self.parameters.update({name: pybamm.InputParameter(name)})
@@ -447,6 +463,85 @@ class PyBaMMBackend:
             average_voltage_v=np.asarray(average_voltages, dtype=np.float64),
             minimum_voltage_v=np.asarray(minimum_voltages, dtype=np.float64),
             discharge_time_s=np.asarray(durations, dtype=np.float64),
+            status=np.asarray(statuses, dtype=np.int64),
+            runtime_s=np.asarray(runtimes, dtype=np.float64),
+        )
+
+    def solve_normalized_discharge_batch(self, inputs: np.ndarray) -> NormalizedDischargeBatch:
+        """Run to voltage cutoff and retain curve shape despite variable duration.
+
+        Every successful curve is interpolated onto ``[0, 1]``. Its physical
+        duration and delivered capacity are returned separately, so downstream
+        benchmarks do not silently pretend that all cells discharge for the
+        same amount of time.
+        """
+        if not self.physical_voltage_cutoffs:
+            raise RuntimeError(
+                "solve_normalized_discharge_batch requires physical_voltage_cutoffs=True"
+            )
+        import time
+
+        normalized_time = np.linspace(0.0, 1.0, self.t_eval.size, dtype=np.float64)
+        voltages, durations, capacities, statuses, runtimes, diagnostics = [], [], [], [], [], []
+        for row in np.asarray(inputs, dtype=np.float64):
+            started = time.perf_counter()
+            try:
+                input_dict = dict(zip(self.input_names, row.tolist()))
+                solution = self.simulation.solve(
+                    self.t_eval, inputs=input_dict, calculate_sensitivities=False
+                )
+                time_values = np.asarray(solution.t, dtype=np.float64).reshape(-1)
+                voltage_values = np.asarray(
+                    solution["Voltage [V]"].entries, dtype=np.float64
+                ).reshape(-1)
+                current_values = np.asarray(
+                    solution["Current [A]"].entries, dtype=np.float64
+                ).reshape(-1)
+                summary = summarize_discharge(time_values, voltage_values, current_values)
+                termination = str(getattr(solution, "termination", "unknown"))
+                reached_cutoff = "minimum voltage" in termination.lower()
+                finite = bool(np.isfinite(voltage_values).all())
+                valid = finite and reached_cutoff and summary["delivered_capacity_ah"] > 0.0
+                if valid:
+                    relative_time = (time_values - time_values[0]) / max(
+                        summary["discharge_time_s"], 1e-12
+                    )
+                    voltage = np.interp(normalized_time, relative_time, voltage_values)
+                else:
+                    voltage = np.zeros_like(normalized_time)
+                voltages.append(voltage)
+                durations.append(summary["discharge_time_s"] if valid else 0.0)
+                capacities.append(summary["delivered_capacity_ah"] if valid else 0.0)
+                statuses.append(int(valid))
+                diagnostics.append(
+                    {
+                        **summary,
+                        "reached_voltage_cutoff": reached_cutoff,
+                        "trajectory_finite": finite,
+                        "termination": termination,
+                        "error": None,
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001
+                voltages.append(np.zeros_like(normalized_time))
+                durations.append(0.0)
+                capacities.append(0.0)
+                statuses.append(0)
+                diagnostics.append(
+                    {
+                        "reached_voltage_cutoff": False,
+                        "trajectory_finite": False,
+                        "termination": "exception",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+            runtimes.append(time.perf_counter() - started)
+        self.last_solve_diagnostics = diagnostics
+        return NormalizedDischargeBatch(
+            normalized_time=normalized_time,
+            voltage_v=np.stack(voltages),
+            discharge_time_s=np.asarray(durations, dtype=np.float64),
+            delivered_capacity_ah=np.asarray(capacities, dtype=np.float64),
             status=np.asarray(statuses, dtype=np.int64),
             runtime_s=np.asarray(runtimes, dtype=np.float64),
         )
