@@ -71,12 +71,9 @@ Initializer 参数训练或 K 步 Learned Refiner 修正
 | 2 | `eps_s` | 隔膜孔隙率 | bounded sigmoid |
 | 3 | `phi_p` | 正极活性材料体积分数 | 耦合可行区间 |
 | 4 | `np_ratio` | N/P 容量比 | bounded sigmoid |
-| 5 | `diffusivity_p_multiplier` | 正极固相扩散率乘子 | log bounded sigmoid |
-| 6 | `diffusivity_n_multiplier` | 负极固相扩散率乘子 | log bounded sigmoid |
-
 `phi_n` 不由网络独立输出，而是根据 `phi_p`、N/P 比和材料容量常数解析计算，从而严格满足容量平衡。
 
-标准 PyBaMM 网格当前不能可靠地把颗粒半径和电极厚度作为运行时 `InputParameter`。因此 MVP 使用两个固相扩散率乘子代替颗粒半径。颗粒半径和厚度属于后续 normalized-coordinate 或经严格有限差分验证的 Track B。
+正负极固相扩散率乘子在当前固定材料 MVP 中均固定为 `1.0`，不属于 5 维优化变量。颗粒半径、厚度和材料性质属于后续 normalized-coordinate 或经严格有限差分验证的 Track B。
 
 ## 2. 项目目录
 
@@ -168,7 +165,7 @@ grad_cell/
 
 ### `configs/design_space/chen2020.yaml`
 
-定义 Chen2020 MVP 的设计边界：三种孔隙率、正极活性材料比例下限、正负极最小非活性相比例、N/P 比以及扩散率乘子范围。
+定义 Chen2020 MVP 的设计边界：三种孔隙率、正极活性材料比例下限、正负极最小非活性相比例和 N/P 比；两个扩散率乘子显式固定为 `1.0`。
 
 `phi_p_min` 当前为 `0.20`。原设想中的 `0.35` 与最大负极孔隙率和最大 N/P 比组合时可能没有可行交集。如果提高该下限，必须同时收紧其他耦合边界并重新运行 decoder 可行性测试。
 

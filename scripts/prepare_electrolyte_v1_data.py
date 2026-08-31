@@ -8,7 +8,12 @@ from urllib.request import urlretrieve
 import numpy as np
 import pandas as pd
 
-from gradcell.data import MOLE_FRACTION_COLUMNS, SOLVENT_COLUMNS, clean_calisol23_frame
+from gradcell.data import (
+    MOLE_FRACTION_COLUMNS,
+    SOLVENT_COLUMNS,
+    clean_calisol23_frame,
+    group_split,
+)
 from gradcell.physics import (
     AnalyticElectrolyteBackend,
     PyBaMMElectrolyteDFNBackend,
@@ -58,6 +63,7 @@ def main() -> None:
     features, feature_names = build_features(frame)
     target_log_k = np.log(frame["k"].to_numpy(dtype=np.float64))
     groups, group_names = pd.factorize(frame["doi"].astype(str), sort=True)
+    train_indices, _, _ = group_split(groups, args.seed)
 
     backend_cls = (
         PyBaMMElectrolyteDFNBackend
@@ -73,7 +79,8 @@ def main() -> None:
     physics_mask = np.zeros(len(frame), dtype=bool)
     reference_log_k = np.log(args.reference_conductivity_ms_cm)
     log_scale = target_log_k - reference_log_k
-    stable_pool = np.flatnonzero((log_scale >= np.log(0.5)) & (log_scale <= np.log(2.0)))
+    stable = (log_scale >= np.log(0.5)) & (log_scale <= np.log(2.0))
+    stable_pool = train_indices[stable[train_indices]]
     rng = np.random.default_rng(args.seed)
     rng.shuffle(stable_pool)
     requested = min(args.physics_samples, len(stable_pool))
@@ -97,6 +104,7 @@ def main() -> None:
         "physics_backend": args.physics_backend,
         "physics_samples_requested": requested,
         "physics_samples_valid": int(physics_mask.sum()),
+        "physics_sampling_partition": "DOI-grouped training split only",
         "physics_interpretation": (
             "Observed conductivity is converted to a bounded multiplicative correction "
             "of the Chen2020 electrolyte-conductivity function. The resulting DFN voltage "

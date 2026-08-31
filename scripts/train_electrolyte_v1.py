@@ -9,28 +9,13 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
+from gradcell.data import group_split
 from gradcell.models import ElectrolytePropertyNetwork
 from gradcell.physics import (
     AnalyticElectrolyteBackend,
     DifferentiablePhysicsLayer,
     PyBaMMElectrolyteDFNBackend,
 )
-
-
-def group_split(groups: np.ndarray, seed: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    unique = np.unique(groups)
-    rng = np.random.default_rng(seed)
-    rng.shuffle(unique)
-    train_end = max(1, int(0.7 * len(unique)))
-    validation_end = max(train_end + 1, int(0.85 * len(unique)))
-    train_groups = unique[:train_end]
-    validation_groups = unique[train_end:validation_end]
-    test_groups = unique[validation_end:]
-    return (
-        np.flatnonzero(np.isin(groups, train_groups)),
-        np.flatnonzero(np.isin(groups, validation_groups)),
-        np.flatnonzero(np.isin(groups, test_groups)),
-    )
 
 
 def metrics(prediction: torch.Tensor, target: torch.Tensor) -> dict[str, float]:

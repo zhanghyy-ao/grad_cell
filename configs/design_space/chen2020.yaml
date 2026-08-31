@@ -9,5 +9,6 @@ design:
   inactive_p_min: 0.03
   inactive_n_min: 0.03
   np_ratio: [1.02, 1.25]
-  diffusivity_p_multiplier: [0.5, 2.0]
-  diffusivity_n_multiplier: [0.5, 2.0]
+  # Chen2020 material properties are fixed in the current five-dimensional search space.
+  diffusivity_p_multiplier: 1.0
+  diffusivity_n_multiplier: 1.0
