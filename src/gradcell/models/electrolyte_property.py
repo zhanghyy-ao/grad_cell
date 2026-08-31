@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 import torch
 from torch import nn
 
@@ -14,8 +12,6 @@ class ElectrolytePropertyNetwork(nn.Module):
         input_dim: int,
         hidden_dim: int = 128,
         depth: int = 3,
-        minimum_conductivity_ms_cm: float = 0.05,
-        maximum_conductivity_ms_cm: float = 50.0,
     ) -> None:
         super().__init__()
         if input_dim <= 0 or depth <= 0:
@@ -27,9 +23,7 @@ class ElectrolytePropertyNetwork(nn.Module):
             width = hidden_dim
         layers.append(nn.Linear(width, 1))
         self.network = nn.Sequential(*layers)
-        self.log_min = math.log(minimum_conductivity_ms_cm)
-        self.log_max = math.log(maximum_conductivity_ms_cm)
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
-        raw = self.network(features).squeeze(-1)
-        return self.log_min + (self.log_max - self.log_min) * torch.sigmoid(raw)
+        """Predict an unbounded, standardized log-conductivity target."""
+        return self.network(features).squeeze(-1)

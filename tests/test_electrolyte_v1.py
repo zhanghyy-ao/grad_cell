@@ -7,12 +7,13 @@ from gradcell.physics import AnalyticElectrolyteBackend, DifferentiablePhysicsLa
 from gradcell.physics.gradient_validation import directional_derivative_check
 
 
-def test_electrolyte_property_network_is_positive_and_bounded():
+def test_electrolyte_property_network_predicts_unbounded_standardized_log_target():
     model = ElectrolytePropertyNetwork(input_dim=6, hidden_dim=16, depth=2).double()
     prediction = model(torch.randn(8, 6, dtype=torch.float64))
     assert prediction.shape == (8,)
-    assert bool((prediction >= math.log(0.05)).all())
-    assert bool((prediction <= math.log(50.0)).all())
+    with torch.no_grad():
+        model.network[-1].bias.fill_(-10.0)
+    assert bool((model(torch.zeros(2, 6, dtype=torch.float64)) < -3.0).all())
 
 
 def test_analytic_electrolyte_backend_gradient_matches_finite_difference():

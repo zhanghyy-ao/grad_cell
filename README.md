@@ -17,6 +17,10 @@ PYTHONPATH=src python scripts/clean_calisol23.py --overwrite
 `prepare_electrolyte_v1_data.py` 也会在内存中应用相同规则，不再把负浓度、缺失标签
 或数值零直接送入 log-conductivity 回归。
 
+当前电解液性质头直接预测由训练集统计量标准化的无界 `log(k)`，不再使用
+`0.05–50 mS/cm` 硬输出范围；在线 DFN loss 的默认权重为 `1.0`，训练日志会同时
+报告加权物理损失及其占总损失的比例。
+
 本仓库目前实现的是第一阶段 MVP，重点验证以下完整链路：
 
 ```text

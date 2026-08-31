@@ -80,10 +80,14 @@ DFN 始终保留 Chen2020 的物理电压截止事件。600 s 只是梯度探针
 CALiSol features
 → standardized features
 → MLP + SiLU + LayerNorm
-→ bounded log conductivity
+→ unbounded standardized log conductivity
+→ inverse target standardization
+→ log conductivity
 ```
 
-输出边界对应 0.05–50 mS/cm，保证电导率为正并减少初期极端 DFN 输入。
+训练集的 `log(k)` 均值和标准差只由训练集合计算。网络直接预测标准化后的
+`log(k)`，性质预测头不再使用 0.05–50 mS/cm 的硬边界；输出经训练集统计量逆变换
+后得到实际 `log(k)`，从而覆盖有效的低电导率正值。
 
 ### 联合损失
 
@@ -93,10 +97,14 @@ L_total = L_property + w_physics * L_voltage
 
 其中：
 
-- `L_property`：实验 `log(k)` 的 Huber loss；
+- `L_property`：标准化实验 `log(k)` 的 Huber loss；
 - `L_voltage`：DFN 预测电压和 Chen2020 辅助目标电压的 Huber loss；
-- `w_physics`：默认 0.1；
+- `w_physics`：本轮消融默认从 0.1 提高到 1.0；
 - 电压先除以 0.05 V 再计算 loss，使数值尺度可解释。
+
+日志额外报告 `physics_voltage_loss_weighted` 和 `physics_loss_fraction`，分别表示
+加权后的物理损失以及它在总损失中的比例。提高权重后必须观察该比例，不能只比较
+两个未经加权、缩放语义不同的 loss 数字。
 
 DFN 的 forward sensitivity 组成：
 
@@ -134,7 +142,7 @@ pytest -q
 ruff check src scripts tests
 ```
 
-重点测试：性质模型输出为正；解析物理层方向导数与有限差分一致；只使用物理电压 loss 时网络仍收到非零梯度。
+重点测试：性质模型能输出无界标准化 log 目标；解析物理层方向导数与有限差分一致；只使用物理电压 loss 时网络仍收到非零梯度。
 
 ### E2：准备 CALiSol-23 与少量 DFN 标签
 
@@ -188,7 +196,7 @@ python scripts\train_electrolyte_v1.py `
   --epochs 100 `
   --batch-size 256 `
   --physics-batch-size 2 `
-  --physics-weight 0.1 `
+  --physics-weight 1.0 `
   --seed 7 `
   --output-dir results\electrolyte_v1_dfn_s7
 ```

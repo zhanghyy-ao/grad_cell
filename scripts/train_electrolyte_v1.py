@@ -43,18 +43,22 @@ def main() -> None:
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--depth", type=int, default=3)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
-    parser.add_argument("--physics-weight", type=float, default=0.1)
+    parser.add_argument("--physics-weight", type=float, default=1.0)
     parser.add_argument("--voltage-scale-v", type=float, default=0.05)
     parser.add_argument("--patience", type=int, default=20)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--output-dir", type=Path, default=Path("results/electrolyte_v1"))
     args = parser.parse_args()
+    if args.physics_weight < 0.0:
+        parser.error("--physics-weight must be non-negative")
+    if args.voltage_scale_v <= 0.0:
+        parser.error("--voltage-scale-v must be positive")
 
     torch.set_default_dtype(torch.float64)
     torch.manual_seed(args.seed)
     with np.load(args.data, allow_pickle=False) as arrays:
         features = torch.from_numpy(arrays["features"].copy()).double()
-        target = torch.from_numpy(arrays["target_log_conductivity"].copy()).double()
+        target_log_k = torch.from_numpy(arrays["target_log_conductivity"].copy()).double()
         groups = arrays["group_id"].copy()
         physics_mask = arrays["physics_mask"].copy()
         target_voltage = torch.from_numpy(arrays["target_voltage"].copy()).double()
@@ -70,8 +74,11 @@ def main() -> None:
     x_mean = features[train_idx].mean(0)
     x_std = features[train_idx].std(0).clamp_min(1e-8)
     normalized = (features - x_mean) / x_std
+    target_mean = target_log_k[train_idx].mean()
+    target_std = target_log_k[train_idx].std().clamp_min(1e-8)
+    target_standardized = (target_log_k - target_mean) / target_std
     property_loader = DataLoader(
-        TensorDataset(normalized[train_idx], target[train_idx]),
+        TensorDataset(normalized[train_idx], target_standardized[train_idx]),
         batch_size=args.batch_size,
         shuffle=True,
         generator=torch.Generator().manual_seed(args.seed),
@@ -121,9 +128,11 @@ def main() -> None:
             except StopIteration:
                 physics_iterator = iter(physics_loader)
                 physics_x, voltage_y, physics_current = next(physics_iterator)
-            predicted_log_k = model(property_x)
-            property_loss = torch.nn.functional.huber_loss(predicted_log_k, property_y)
-            predicted_physics_log_k = model(physics_x)
+            predicted_standardized_log_k = model(property_x)
+            property_loss = torch.nn.functional.huber_loss(
+                predicted_standardized_log_k, property_y
+            )
+            predicted_physics_log_k = model(physics_x) * target_std + target_mean
             physics_inputs = torch.stack(
                 [predicted_physics_log_k - reference_log_k, physics_current], dim=-1
             )
@@ -147,14 +156,21 @@ def main() -> None:
         with torch.no_grad():
             validation_loss = float(
                 torch.nn.functional.huber_loss(
-                    model(normalized[validation_idx]), target[validation_idx]
+                    model(normalized[validation_idx]),
+                    target_standardized[validation_idx],
                 )
             )
+        mean_property_loss = property_sum / updates
+        mean_physics_loss = physics_sum / updates
+        mean_total_loss = total_sum / updates
+        weighted_physics_loss = args.physics_weight * mean_physics_loss
         record = {
             "epoch": epoch,
-            "property_loss": property_sum / updates,
-            "physics_voltage_loss_scaled": physics_sum / updates,
-            "total_loss": total_sum / updates,
+            "property_loss": mean_property_loss,
+            "physics_voltage_loss_scaled": mean_physics_loss,
+            "physics_voltage_loss_weighted": weighted_physics_loss,
+            "physics_loss_fraction": weighted_physics_loss / max(mean_total_loss, 1e-12),
+            "total_loss": mean_total_loss,
             "validation_property_loss": validation_loss,
         }
         history.append(record)
@@ -172,7 +188,7 @@ def main() -> None:
     model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        test_prediction = model(normalized[test_idx])
+        test_prediction = model(normalized[test_idx]) * target_std + target_mean
     report = {
         "data": str(args.data),
         "physics_backend": args.physics_backend,
@@ -183,8 +199,13 @@ def main() -> None:
             "test": len(test_idx),
         },
         "physics_train_rows": len(train_physics),
+        "physics_weight": args.physics_weight,
+        "target_standardization": {
+            "mean_log_ms_cm": float(target_mean),
+            "std_log_ms_cm": float(target_std),
+        },
         "best_validation_property_loss": best_validation,
-        "test_metrics": metrics(test_prediction, target[test_idx]),
+        "test_metrics": metrics(test_prediction, target_log_k[test_idx]),
     }
     args.output_dir.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -195,7 +216,12 @@ def main() -> None:
                 "hidden_dim": args.hidden_dim,
                 "depth": args.depth,
             },
-            "normalization": {"x_mean": x_mean, "x_std": x_std},
+            "normalization": {
+                "x_mean": x_mean,
+                "x_std": x_std,
+                "target_mean_log_ms_cm": target_mean,
+                "target_std_log_ms_cm": target_std,
+            },
             "feature_names": feature_names,
             "reference_conductivity_ms_cm": metadata["reference_conductivity_ms_cm"],
             "split_indices": {
@@ -211,7 +237,7 @@ def main() -> None:
     np.savez_compressed(
         args.output_dir / "test_predictions.npz",
         indices=test_idx.numpy(),
-        target_log_conductivity=target[test_idx].numpy(),
+        target_log_conductivity=target_log_k[test_idx].numpy(),
         predicted_log_conductivity=test_prediction.detach().numpy(),
     )
     print(json.dumps(report, indent=2), flush=True)

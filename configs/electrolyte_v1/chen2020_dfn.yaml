@@ -9,11 +9,10 @@ data:
   physics_samples: 32
 
 model:
-  target: log_ionic_conductivity_ms_cm
+  target: standardized_log_ionic_conductivity_ms_cm
   hidden_dim: 128
   depth: 3
-  minimum_conductivity_ms_cm: 0.05
-  maximum_conductivity_ms_cm: 50.0
+  output_constraint: unbounded
 
 physics:
   model: DFN
@@ -33,9 +32,9 @@ training:
   property_batch_size: 256
   physics_batch_size: 2
   learning_rate: 3.0e-4
-  property_loss: huber_log_conductivity
+  property_loss: huber_standardized_log_conductivity
   voltage_loss: huber
   voltage_scale_v: 0.05
-  physics_weight: 0.1
+  physics_weight: 1.0
   patience: 20
   gradient_clip_norm: 5.0

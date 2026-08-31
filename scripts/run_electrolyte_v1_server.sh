@@ -46,7 +46,7 @@ echo "[5/5] Joint property + online DFN training"
   --epochs "${EPOCHS}" \
   --batch-size 256 \
   --physics-batch-size 2 \
-  --physics-weight 0.1 \
+  --physics-weight 1.0 \
   --seed "${SEED}" \
   --output-dir "${RESULT_DIR}"
 
