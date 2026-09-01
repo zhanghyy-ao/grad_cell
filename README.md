@@ -21,6 +21,21 @@ PYTHONPATH=src python scripts/generate_dfn_parameter_benchmark.py \
 
 服务器一键入口：`SEED=7 PHYSICS_SAMPLES=32 EPOCHS=100 bash scripts/run_electrolyte_v1_server.sh`。
 
+完成单 seed 权重探索后，正式对照改用嵌套 physics 子集与多模型 seed 矩阵：
+
+```bash
+PYTHONPATH=src python scripts/run_electrolyte_v1_experiment_matrix.py \
+  --split-seeds 7 --model-seeds 7 17 27 \
+  --physics-samples 32 64 128 --physics-weights 2 5 \
+  --validation-physics-samples 32 --test-physics-samples 32 \
+  --epochs 100 --output-dir results/electrolyte_v1_matrix
+```
+
+脚本为每个 DOI split 只生成一次最大物理数据集，使用保存的 `physics_rank` 构造
+`32 ⊂ 64 ⊂ 128` 的公平嵌套训练子集；模型初始化 seed 与 split seed 分离。验证和
+测试 physics 行不参与训练，只用于报告模型域 voltage RMSE、求解成功率和运行时间。
+运行支持断点续跑，并汇总多 seed 均值与标准差到 `aggregate.json`/`aggregate.csv`。
+
 正式准备数据前先执行可追溯清洗：
 
 ```bash
@@ -33,8 +48,9 @@ PYTHONPATH=src python scripts/clean_calisol23.py --overwrite
 或数值零直接送入 log-conductivity 回归。
 
 当前电解液性质头直接预测由训练集统计量标准化的无界 `log(k)`，不再使用
-`0.05–50 mS/cm` 硬输出范围；在线 DFN loss 的默认权重为 `1.0`，训练日志会同时
-报告加权物理损失及其占总损失的比例。
+`0.05–50 mS/cm` 硬输出范围。代码默认 DFN 权重为 `1.0` 只用于单次运行便利，
+不代表实验结论；正式矩阵必须包含 weight=0 纯监督基线，并根据多 seed 结果比较
+weight=2/5。训练日志会同时报告加权物理损失及其占总损失的比例。
 
 本仓库目前实现的是第一阶段 MVP，重点验证以下完整链路：
 
