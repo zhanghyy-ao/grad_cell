@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-
 PARAMETER_FIELDS = (
     "Positive electrode porosity",
     "Negative electrode porosity",

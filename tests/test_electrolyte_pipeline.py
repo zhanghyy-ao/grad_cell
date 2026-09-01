@@ -11,9 +11,9 @@ def load_pipeline_module():
     return module
 
 
-def test_weight_slug_is_path_safe_and_stable():
+def test_pipeline_no_longer_exposes_property_physics_weight_sweep():
     module = load_pipeline_module()
-    assert module.weight_slug(0.0) == "0"
-    assert module.weight_slug(0.1) == "0p1"
-    assert module.weight_slug(1.0) == "1"
-    assert module.weight_slug(2.5) == "2p5"
+    assert not hasattr(module, "weight_slug")
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    assert "--physics-weights" not in source
+    assert "--physics-validation-samples" in source

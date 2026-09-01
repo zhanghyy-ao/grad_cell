@@ -41,14 +41,14 @@ def build_features(frame: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Prepare CALiSol-23 plus a small Chen2020 DFN physics subset."
+        description="Prepare DOI-isolated PyBaMM DFN voltage targets for physics-only training."
     )
     parser.add_argument("--csv", type=Path, default=Path("data/calisol23.csv"))
     parser.add_argument("--output", type=Path, default=Path("data/electrolyte_v1.npz"))
     parser.add_argument("--physics-backend", choices=("dfn", "analytic"), default="dfn")
     parser.add_argument("--physics-samples", type=int, default=32)
-    parser.add_argument("--physics-validation-samples", type=int, default=0)
-    parser.add_argument("--physics-test-samples", type=int, default=0)
+    parser.add_argument("--physics-validation-samples", type=int, default=8)
+    parser.add_argument("--physics-test-samples", type=int, default=8)
     parser.add_argument("--time-points", type=int, default=41)
     parser.add_argument("--probe-horizon-s", type=float, default=600.0)
     parser.add_argument("--reference-conductivity-ms-cm", type=float, default=10.0)
@@ -144,9 +144,10 @@ def main() -> None:
         "physics_samples_valid_by_partition": valid_by_partition,
         "physics_sampling_partition": "nested subsets within DOI-grouped partitions",
         "physics_interpretation": (
-            "Observed conductivity is converted to a bounded multiplicative correction "
-            "of the Chen2020 electrolyte-conductivity function. The resulting DFN voltage "
-            "trajectory is a model-domain auxiliary label, not experimental cell voltage."
+            "Observed conductivity is used only offline to define the synthetic target "
+            "log_conductivity_scale and generate a PyBaMM Chen2020 DFN voltage trajectory. "
+            "Training consumes voltage targets only; conductivity remains an evaluation-only "
+            "diagnostic. These are synthetic model-domain targets, not experimental cell voltage."
         ),
         "reference_conductivity_ms_cm": args.reference_conductivity_ms_cm,
         "current_a": args.current_a,

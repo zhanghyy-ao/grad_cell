@@ -1,5 +1,3 @@
-import math
-
 import torch
 
 from gradcell.models import ElectrolytePropertyNetwork
@@ -7,13 +5,18 @@ from gradcell.physics import AnalyticElectrolyteBackend, DifferentiablePhysicsLa
 from gradcell.physics.gradient_validation import directional_derivative_check
 
 
-def test_electrolyte_property_network_predicts_unbounded_standardized_log_target():
-    model = ElectrolytePropertyNetwork(input_dim=6, hidden_dim=16, depth=2).double()
+def test_electrolyte_property_network_predicts_bounded_log_scale():
+    model = ElectrolytePropertyNetwork(
+        input_dim=6, hidden_dim=16, depth=2, min_log_scale=-0.7, max_log_scale=0.7
+    ).double()
     prediction = model(torch.randn(8, 6, dtype=torch.float64))
     assert prediction.shape == (8,)
     with torch.no_grad():
         model.network[-1].bias.fill_(-10.0)
-    assert bool((model(torch.zeros(2, 6, dtype=torch.float64)) < -3.0).all())
+    saturated = model(torch.zeros(2, 6, dtype=torch.float64))
+    assert bool((saturated >= -0.7).all())
+    assert bool((saturated <= 0.7).all())
+    assert bool((saturated < -0.69).all())
 
 
 def test_analytic_electrolyte_backend_gradient_matches_finite_difference():
@@ -36,14 +39,14 @@ def test_analytic_electrolyte_backend_gradient_matches_finite_difference():
     assert result["relative_directional_error"] < 1e-5
 
 
-def test_hybrid_voltage_loss_reaches_property_network():
+def test_physics_only_voltage_loss_reaches_log_scale_network():
     model = ElectrolytePropertyNetwork(input_dim=4, hidden_dim=16, depth=2).double()
     backend = AnalyticElectrolyteBackend(time_points=21, probe_horizon_s=200.0)
     layer = DifferentiablePhysicsLayer(backend)
     features = torch.randn(3, 4, dtype=torch.float64)
-    log_k = model(features)
-    current = torch.full_like(log_k, 5.0)
-    physics_inputs = torch.stack([log_k - math.log(10.0), current], dim=-1)
+    log_scale = model(features)
+    current = torch.full_like(log_scale, 5.0)
+    physics_inputs = torch.stack([log_scale, current], dim=-1)
     voltage, status, _ = layer(physics_inputs)
     assert bool((status == 1).all())
     loss = voltage.square().mean()

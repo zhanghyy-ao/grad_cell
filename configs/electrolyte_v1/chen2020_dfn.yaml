@@ -9,10 +9,11 @@ data:
   physics_samples: 32
 
 model:
-  target: standardized_log_ionic_conductivity_ms_cm
+  target: log_conductivity_scale
   hidden_dim: 128
   depth: 3
-  output_constraint: unbounded
+  output_constraint: tanh_bounded
+  conductivity_scale_bounds: [0.5, 2.0]
 
 physics:
   model: DFN
@@ -29,12 +30,11 @@ physics:
 
 training:
   epochs: 100
-  property_batch_size: 256
   physics_batch_size: 2
   learning_rate: 3.0e-4
-  property_loss: huber_standardized_log_conductivity
+  property_loss: disabled
   voltage_loss: huber
   voltage_scale_v: 0.05
-  physics_weight: 1.0
+  checkpoint_metric: validation_voltage_rmse_scaled
   patience: 20
   gradient_clip_norm: 5.0

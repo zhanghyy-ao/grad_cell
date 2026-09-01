@@ -36,28 +36,16 @@ def run(command: list[str], root: Path, log_path: Path) -> None:
         raise subprocess.CalledProcessError(return_code, command)
 
 
-def slug(value: float) -> str:
-    return format(value, "g").replace("-", "m").replace(".", "p")
-
-
 def aggregate(rows: list[dict]) -> list[dict]:
     grouped: dict[tuple, list[dict]] = defaultdict(list)
     for row in rows:
-        grouped[(row["split_seed"], row["physics_samples"], row["physics_weight"])].append(row)
+        grouped[(row["split_seed"], row["physics_samples"])].append(row)
     summaries = []
-    metric_names = (
-        "mae_log_ms_cm",
-        "rmse_log_ms_cm",
-        "r2_log_ms_cm",
-        "median_relative_error",
-        "relative_error_p90",
-        "relative_error_p95",
-    )
+    metric_names = ("voltage_rmse_v", "voltage_rmse_scaled", "success_rate")
     for key, group in sorted(grouped.items()):
         summary = {
             "split_seed": key[0],
             "physics_samples": key[1],
-            "physics_weight": key[2],
             "model_seeds": [row["model_seed"] for row in group],
             "runs": len(group),
         }
@@ -77,11 +65,9 @@ def main() -> None:
     parser.add_argument("--physics-backend", choices=("dfn", "analytic"), default="dfn")
     parser.add_argument("--model-seeds", type=int, nargs="+", default=[7, 17, 27])
     parser.add_argument("--physics-samples", type=int, nargs="+", default=[32, 64, 128])
-    parser.add_argument("--physics-weights", type=float, nargs="+", default=[2.0, 5.0])
     parser.add_argument("--validation-physics-samples", type=int, default=32)
     parser.add_argument("--test-physics-samples", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--physics-batch-size", type=int, default=2)
     parser.add_argument("--output-dir", type=Path, default=Path("results/electrolyte_v1_matrix"))
     parser.add_argument("--prepare-only", action="store_true")
@@ -89,8 +75,6 @@ def main() -> None:
     args = parser.parse_args()
     if any(value <= 0 for value in args.physics_samples):
         parser.error("--physics-samples must contain positive values")
-    if any(value <= 0.0 for value in args.physics_weights):
-        parser.error("positive-physics runs require --physics-weights > 0")
 
     root = Path(__file__).resolve().parents[1]
     output_root = (root / args.output_dir).resolve()
@@ -101,9 +85,8 @@ def main() -> None:
         "split_seeds": args.split_seeds,
         "model_seeds": args.model_seeds,
         "physics_samples": args.physics_samples,
-        "physics_weights": args.physics_weights,
         "physics_backend": args.physics_backend,
-        "includes_supervised_baseline": True,
+        "training_objective": "physics_voltage_only",
         "dataset_policy": (
             "One maximum-size nested physics dataset per DOI split; smaller training subsets "
             "use saved physics_rank, while validation/test physics rows are evaluation-only."
@@ -146,17 +129,9 @@ def main() -> None:
         if args.prepare_only:
             continue
 
-        experiment_pairs = [(0, 0.0)] + [
-            (sample_count, weight)
-            for sample_count in args.physics_samples
-            for weight in args.physics_weights
-        ]
         for model_seed in args.model_seeds:
-            for sample_count, weight in experiment_pairs:
-                run_name = (
-                    f"split_{split_seed}/model_{model_seed}/"
-                    f"physics_{sample_count}_weight_{slug(weight)}"
-                )
+            for sample_count in args.physics_samples:
+                run_name = f"split_{split_seed}/model_{model_seed}/physics_{sample_count}"
                 run_dir = output_root / run_name
                 metrics_path = run_dir / "metrics.json"
                 if args.force or not metrics_path.exists():
@@ -170,16 +145,12 @@ def main() -> None:
                             args.physics_backend,
                             "--physics-samples",
                             str(sample_count),
-                            "--physics-weight",
-                            str(weight),
                             "--split-seed",
                             str(split_seed),
                             "--seed",
                             str(model_seed),
                             "--epochs",
                             str(args.epochs),
-                            "--batch-size",
-                            str(args.batch_size),
                             "--physics-batch-size",
                             str(args.physics_batch_size),
                             "--output-dir",
@@ -194,8 +165,7 @@ def main() -> None:
                         "split_seed": split_seed,
                         "model_seed": model_seed,
                         "physics_samples": sample_count,
-                        "physics_weight": weight,
-                        **report["test_metrics"],
+                        **report["physics_evaluation"]["test"],
                     }
                 )
 
@@ -205,9 +175,7 @@ def main() -> None:
     (output_root / "all_runs.json").write_text(
         json.dumps(completed_rows, indent=2), encoding="utf-8"
     )
-    (output_root / "aggregate.json").write_text(
-        json.dumps(summaries, indent=2), encoding="utf-8"
-    )
+    (output_root / "aggregate.json").write_text(json.dumps(summaries, indent=2), encoding="utf-8")
     if summaries:
         with (output_root / "aggregate.csv").open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=list(summaries[0]))

@@ -2,7 +2,7 @@
 
 GradCell 是一个面向电芯逆向设计的研究原型。模型接收能量与功率之间的连续性能偏好，先预测一个满足制造约束的电芯设计，再读取 PyBaMM 提供的一阶物理敏感度，用少量梯度更新进一步改善设计。
 
-当前同时提供一条独立的第一版电解液实验路线：固定 Chen2020 电极与结构，使用 CALiSol-23 监督预测离子电导率，并将预测值作为电解液电导率倍率接入 PyBaMM DFN。DFN 电压 loss 通过 IDAKLU sensitivity 和自定义 `Jᵀv` 回传到性质网络。详细流程见 `docs/第一版_固定材料电解液性质_DFN端到端实验流程.md`。
+当前同时提供一条独立的电解液纯物理端到端路线：固定 Chen2020 电极与结构，网络由 CALiSol-23 配方特征直接预测有界 `log_conductivity_scale`，将其接入 PyBaMM DFN，并且只用 DFN 电压轨迹 loss 训练。Property Loss 已删除；实测电导率仅离线生成合成 DFN 目标并用于训练后诊断。DFN sensitivity 和自定义 `Jᵀv` 将电压梯度传回网络。详细流程见 `docs/第一版_固定材料电解液性质_DFN端到端实验流程.md`。
 
 另外提供独立的 DFN 逆参数 benchmark 生成器。它参考 Battery-Sim-Agent 的
 单参数/多参数扰动、失败过滤和 benchmark case 设计，但由 GradCell 独立实现：
@@ -21,12 +21,12 @@ PYTHONPATH=src python scripts/generate_dfn_parameter_benchmark.py \
 
 服务器一键入口：`SEED=7 PHYSICS_SAMPLES=32 EPOCHS=100 bash scripts/run_electrolyte_v1_server.sh`。
 
-完成单 seed 权重探索后，正式对照改用嵌套 physics 子集与多模型 seed 矩阵：
+纯物理流程的正式对照使用嵌套 physics 子集与多模型 seed 矩阵：
 
 ```bash
 PYTHONPATH=src python scripts/run_electrolyte_v1_experiment_matrix.py \
   --split-seeds 7 --model-seeds 7 17 27 \
-  --physics-samples 32 64 128 --physics-weights 2 5 \
+  --physics-samples 32 64 128 \
   --validation-physics-samples 32 --test-physics-samples 32 \
   --epochs 100 --output-dir results/electrolyte_v1_matrix
 ```
@@ -47,10 +47,9 @@ PYTHONPATH=src python scripts/clean_calisol23.py --overwrite
 `prepare_electrolyte_v1_data.py` 也会在内存中应用相同规则，不再把负浓度、缺失标签
 或数值零直接送入 log-conductivity 回归。
 
-当前电解液性质头直接预测由训练集统计量标准化的无界 `log(k)`，不再使用
-`0.05–50 mS/cm` 硬输出范围。代码默认 DFN 权重为 `1.0` 只用于单次运行便利，
-不代表实验结论；正式矩阵必须包含 weight=0 纯监督基线，并根据多 seed 结果比较
-weight=2/5。训练日志会同时报告加权物理损失及其占总损失的比例。
+当前电解液网络直接预测 `log_conductivity_scale`，通过 `tanh` 约束在
+`[log(0.5), log(2.0)]`，然后直接进入 Chen2020 DFN。训练不再计算 Property Loss，
+也不存在 physics weight sweep；验证电压 RMSE 是早停和 checkpoint 选择标准。
 
 本仓库目前实现的是第一阶段 MVP，重点验证以下完整链路：
 
