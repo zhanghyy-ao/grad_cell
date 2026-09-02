@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from gradcell.design import DesignSpace
 from gradcell.experiments import ExperimentRun
+from gradcell.losses import SmoothTchebycheff
 from gradcell.models import GradCell
 from gradcell.physics import AnalyticToyBackend, DifferentiablePhysicsLayer, PyBaMMBackend
 from gradcell.training.trainer import train
@@ -25,7 +28,12 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--refinement-steps", type=int, default=0)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
-    parser.add_argument("--current-ramp-time-s", type=float, default=1.0)
+    parser.add_argument("--current-ramp-time-s", type=float, default=0.0)
+    parser.add_argument(
+        "--reference-front",
+        type=Path,
+        help="Reference-front NPZ used to calibrate energy/power ideal and nadir values.",
+    )
     parser.add_argument("--validation-interval", type=int, default=25)
     parser.add_argument("--early-stopping-patience", type=int)
     parser.add_argument("--seed", type=int, default=7)
@@ -35,6 +43,14 @@ def main() -> None:
     args = parser.parse_args()
     with ExperimentRun("train_mvp", args, run_dir=args.run_dir) as run:
         torch.manual_seed(args.seed)
+        objective = None
+        objective_bounds = None
+        if args.reference_front is not None:
+            with np.load(args.reference_front, allow_pickle=False) as arrays:
+                front_metadata = json.loads(str(arrays["metadata"]))
+            objective_bounds = front_metadata["bounds"]
+            objective = SmoothTchebycheff(**objective_bounds)
+            run.log(f"objective bounds loaded from {args.reference_front}: {objective_bounds}")
         run.log(
             f"building {args.backend}/{args.model} 1C/3C backends; "
             f"capacity_formula={args.capacity_formula}"
@@ -57,6 +73,7 @@ def main() -> None:
             DifferentiablePhysicsLayer(backend1),
             DifferentiablePhysicsLayer(backend3),
             design_space=DesignSpace(capacity_formula=args.capacity_formula),
+            objective=objective,
         ).double()
         run.event("training_started", parameter_count=sum(p.numel() for p in model.parameters()))
         result = train(
@@ -80,6 +97,18 @@ def main() -> None:
                 "best_validation_loss": result.best_validation_loss,
                 "best_step": result.best_step,
                 "stopped_early": result.stopped_early,
+                "model_config": {
+                    "backend": args.backend,
+                    "physics_model": args.model,
+                    "capacity_formula": args.capacity_formula,
+                    "current_ramp_time_s": args.current_ramp_time_s,
+                    "reference_front": str(args.reference_front)
+                    if args.reference_front is not None
+                    else None,
+                    "objective_bounds": objective_bounds,
+                    "refinement_steps": args.refinement_steps,
+                    "seed": args.seed,
+                },
             },
             args.checkpoint,
         )

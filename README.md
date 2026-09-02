@@ -77,6 +77,22 @@ Initializer 参数训练或 K 步 Learned Refiner 修正
 
 仓库中的 `AnalyticToyBackend` 只用于快速测试代码、梯度和训练闭环，不是科学电池模型。正式实验必须使用 `PyBaMMBackend`，并在后续使用 DFN 对候选设计进行统一复核。
 
+GradCell 主任务的分阶段实验入口已经统一为：
+
+```bash
+python scripts/run_gradcell_exploration.py --stage checks
+python scripts/run_gradcell_exploration.py --stage reference-data --reference-samples 5000
+python scripts/run_gradcell_exploration.py --stage reference-front --reference-samples 5000
+python scripts/run_gradcell_exploration.py --stage train-k0 --reference-samples 5000
+python scripts/run_gradcell_exploration.py --stage evaluate-k0 --reference-samples 5000
+python scripts/run_gradcell_exploration.py --stage train-refiner --reference-samples 5000
+python scripts/run_gradcell_exploration.py --stage evaluate-refiner --reference-samples 5000
+python scripts/run_gradcell_exploration.py --stage verify-dfn --reference-samples 5000
+```
+
+每一步的实验目的、判据和服务器命令见
+[`docs/GradCell初探_分阶段实验执行.md`](docs/GradCell初探_分阶段实验执行.md)。
+
 ## 1. 当前实现范围
 
 当前版本包含：
