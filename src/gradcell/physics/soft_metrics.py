@@ -11,7 +11,9 @@ class PerformanceMetrics:
 
     # 单位 Wh/kg，按软截止门积分得到的可用比能量。
     specific_energy_wh_kg: torch.Tensor
-    # 单位 W/kg，用比能量除以有效放电时间得到的比功率。
+    # 平滑截止门积分得到的可释放容量，单位 Ah。
+    delivered_capacity_ah: torch.Tensor
+    # 单位 W/kg；保留用于监督数据诊断，不作为 GradCell 主优化目标。
     specific_power_w_kg: torch.Tensor
     # 单位 V，使用 log-sum-exp 近似轨迹最小电压。
     minimum_voltage_v: torch.Tensor
@@ -39,16 +41,20 @@ def discharge_metrics(
     # 固定仿真时域下相邻采样点的时间间隔，单位 s。
     dt = horizon_s / (voltage.shape[-1] - 1)
     # 对 I*V*gate 积分并从焦耳/瓦秒换算为 Wh。
-    usable_wh = torch.trapezoid(
-        current_a[:, None] * voltage * gate,
-        dx=dt,
-        dim=-1,
-    ) / 3600.0
+    usable_wh = (
+        torch.trapezoid(
+            current_a[:, None] * voltage * gate,
+            dx=dt,
+            dim=-1,
+        )
+        / 3600.0
+    )
     # gate 的积分表示有效放电时长，单位 h。
     effective_h = torch.trapezoid(gate, dx=dt, dim=-1) / 3600.0
-    # 用 stack mass 归一化能量，并用有效时间计算平均比功率。
+    # 用 stack mass 归一化能量，并计算平滑截止下的可释放容量。
     specific_energy = usable_wh / mass_kg
+    delivered_capacity = current_a * effective_h
     specific_power = specific_energy / effective_h.clamp_min(1e-6)
     # -tau*logsumexp(-V/tau) 是 min(V) 的平滑近似，保持可微。
     soft_min_voltage = -0.02 * torch.logsumexp(-voltage / 0.02, dim=-1)
-    return PerformanceMetrics(specific_energy, specific_power, soft_min_voltage)
+    return PerformanceMetrics(specific_energy, delivered_capacity, specific_power, soft_min_voltage)

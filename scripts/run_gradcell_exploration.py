@@ -104,8 +104,6 @@ def main() -> None:
             str(args.model_seed),
             "--checkpoint",
             str(k0_checkpoint),
-            "--run-dir",
-            str(k0_checkpoint.parent / "run"),
         ],
         "evaluate-k0": [
             python,
@@ -138,8 +136,6 @@ def main() -> None:
             str(args.model_seed),
             "--checkpoint",
             str(refiner_checkpoint),
-            "--run-dir",
-            str(refiner_checkpoint.parent / "run"),
         ],
         "evaluate-refiner": [
             python,

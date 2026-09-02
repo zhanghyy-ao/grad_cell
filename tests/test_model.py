@@ -13,9 +13,7 @@ class ControlledFailureBackend:
     def solve_batch(self, inputs: np.ndarray) -> PhysicsBatch:
         batch_size, parameter_count = inputs.shape
         trajectories = np.full((batch_size, 1, 11), 3.7, dtype=np.float64)
-        jacobian = np.full(
-            (batch_size, 1, 11, parameter_count), 1e-3, dtype=np.float64
-        )
+        jacobian = np.full((batch_size, 1, 11, parameter_count), 1e-3, dtype=np.float64)
         status = np.ones(batch_size, dtype=np.int64)
         failed = np.ones(batch_size, dtype=bool) if self.fail_all else np.arange(batch_size) == 1
         trajectories[failed] = np.nan
@@ -69,9 +67,9 @@ def test_failed_sample_does_not_contaminate_valid_sample():
     assert step.status.tolist() == [1, 0]
     assert torch.isfinite(step.loss).all()
     assert torch.isfinite(step.energy).all()
-    assert torch.isfinite(step.power).all()
+    assert torch.isfinite(step.retention).all()
     assert step.energy[1] == 0.0
-    assert step.power[1] == 0.0
+    assert step.retention[1] == 0.0
 
     step.loss.sum().backward()
     assert latent.grad is not None

@@ -10,10 +10,10 @@ import numpy as np
 class PhysicsBatch:
     """一次 batch 物理求解的统一返回结构。"""
 
-    trajectories: np.ndarray # 物理输出轨迹
-    jacobian: np.ndarray   # 轨迹对输入参数的 雅可比矩阵（真的可以求得吗？）
-    status: np.ndarray # 求解是否成功
-    runtime_s: np.ndarray # 每个样本的求解时间
+    trajectories: np.ndarray  # 物理输出轨迹
+    jacobian: np.ndarray  # 轨迹对输入参数的 雅可比矩阵（真的可以求得吗？）
+    status: np.ndarray  # 求解是否成功
+    runtime_s: np.ndarray  # 每个样本的求解时间
 
 
 @dataclass(frozen=True)
@@ -53,9 +53,7 @@ def summarize_discharge(
     if not (time_s.size == voltage_v.size == current_a.size) or time_s.size < 2:
         raise ValueError("Discharge trajectory arrays must have the same length >= 2")
     if not (
-        np.isfinite(time_s).all()
-        and np.isfinite(voltage_v).all()
-        and np.isfinite(current_a).all()
+        np.isfinite(time_s).all() and np.isfinite(voltage_v).all() and np.isfinite(current_a).all()
     ):
         raise ValueError("Discharge trajectory contains non-finite values")
     discharge_current = np.clip(current_a, 0.0, None)
@@ -185,6 +183,7 @@ class PyBaMMBackend:
         calculate_sensitivities: bool = True,
         current_ramp_time_s: float = 1.0,
         physical_voltage_cutoffs: bool = False,
+        training_voltage_floor_v: float = -10.0,
     ) -> None:
         # 延迟导入 PyBaMM，使 toy 后端和基础测试不依赖该可选依赖。
         try:
@@ -205,7 +204,7 @@ class PyBaMMBackend:
             # Physical supervised runs retain the parameter-set voltage events.
             self.parameters.update(
                 {
-                    "Lower voltage cut-off [V]": 0.0,
+                    "Lower voltage cut-off [V]": training_voltage_floor_v,
                     "Upper voltage cut-off [V]": 10.0,
                 }
             )
@@ -244,7 +243,9 @@ class PyBaMMBackend:
         def scaled_negative_diffusivity(stoichiometry, temperature):
             # 对负极扩散率执行与正极相同的基准值缩放。
             base = (
-                negative_diffusivity(stoichiometry, temperature) #stoichiometry 当前材料颗粒内部已经填充了锂离子的“空位”占所有可用空位的百分比。
+                negative_diffusivity(
+                    stoichiometry, temperature
+                )  # stoichiometry 当前材料颗粒内部已经填充了锂离子的“空位”占所有可用空位的百分比。
                 if callable(negative_diffusivity)
                 else negative_diffusivity
             )
@@ -276,7 +277,7 @@ class PyBaMMBackend:
             raise KeyError(f"No sensitivity for {name!r}; available: {list(sensitivities)}")
         value = sensitivities[name]
         if callable(value):
-            value = value(self.t_eval)
+            value = value(solution_time)
         elif hasattr(value, "entries"):
             value = value.entries
         value = np.asarray(value, dtype=np.float64).reshape(-1)
@@ -311,7 +312,8 @@ class PyBaMMBackend:
                 for output_name in self.output_variables:
                     # 逐输出提取轨迹，并堆叠其对所有输入的导数。
                     variable = solution[output_name]
-                    values = np.asarray(variable(self.t_eval), dtype=np.float64).reshape(-1)
+                    raw_values = np.asarray(variable(solution.t), dtype=np.float64).reshape(-1)
+                    values = np.interp(self.t_eval, solution.t, raw_values)
                     output_rows.append(values)
                     if self.calculate_sensitivities:
                         sensitivity_rows.append(
@@ -329,11 +331,15 @@ class PyBaMMBackend:
                         )
                 trajectory = np.stack(output_rows, axis=0)
                 jacobian = np.stack(sensitivity_rows, axis=0)
+                termination = str(getattr(solution, "termination", "unknown"))
+                safely_depleted = termination.startswith("event: Minimum voltage")
                 completed_horizon = actual_end_time_s >= self.horizon_s - 1e-8
                 trajectory_finite = bool(np.isfinite(trajectory).all())
                 jacobian_finite = bool(np.isfinite(jacobian).all())
-                success = completed_horizon and trajectory_finite and (
-                    not self.calculate_sensitivities or jacobian_finite
+                success = (
+                    (completed_horizon or safely_depleted)
+                    and trajectory_finite
+                    and (not self.calculate_sensitivities or jacobian_finite)
                 )
                 if success:
                     trajectories.append(trajectory)
@@ -349,9 +355,12 @@ class PyBaMMBackend:
                         "requested_end_time_s": self.horizon_s,
                         "actual_end_time_s": actual_end_time_s,
                         "completed_requested_horizon": bool(completed_horizon),
+                        "padded_after_safe_depletion": bool(
+                            safely_depleted and not completed_horizon
+                        ),
                         "trajectory_finite": trajectory_finite,
                         "jacobian_finite": jacobian_finite,
-                        "termination": str(getattr(solution, "termination", "unknown")),
+                        "termination": termination,
                         "current_ramp_time_s": self.current_ramp_time_s,
                         "error": None,
                     }
@@ -391,9 +400,7 @@ class PyBaMMBackend:
         is non-differentiable and intended for capacity calibration and labels.
         """
         if not self.physical_voltage_cutoffs:
-            raise RuntimeError(
-                "solve_discharge_batch requires physical_voltage_cutoffs=True"
-            )
+            raise RuntimeError("solve_discharge_batch requires physical_voltage_cutoffs=True")
         import time
 
         capacities, energies, average_voltages = [], [], []
@@ -417,10 +424,7 @@ class PyBaMMBackend:
                 summary = summarize_discharge(time_values, voltage_values, current_values)
                 termination = str(getattr(solution, "termination", "unknown"))
                 reached_voltage_cutoff = "minimum voltage" in termination.lower()
-                valid = (
-                    summary["delivered_capacity_ah"] > 0.0
-                    and summary["discharge_time_s"] > 0.0
-                )
+                valid = summary["delivered_capacity_ah"] > 0.0 and summary["discharge_time_s"] > 0.0
                 capacities.append(summary["delivered_capacity_ah"])
                 energies.append(summary["delivered_energy_wh"])
                 average_voltages.append(summary["average_voltage_v"])

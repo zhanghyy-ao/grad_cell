@@ -32,8 +32,8 @@ def test_scalarized_loss_respects_preference_endpoints() -> None:
     bounds = {
         "energy_ideal": 10.0,
         "energy_nadir": 0.0,
-        "power_ideal": 10.0,
-        "power_nadir": 0.0,
+        "retention_ideal": 10.0,
+        "retention_nadir": 0.0,
     }
     energy = np.asarray([10.0, 0.0])
     power = np.asarray([0.0, 10.0])

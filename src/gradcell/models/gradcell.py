@@ -20,7 +20,7 @@ class GradCellStep:
     design: CellDesign
     loss: torch.Tensor
     energy: torch.Tensor
-    power: torch.Tensor
+    retention: torch.Tensor
     status: torch.Tensor
 
 
@@ -66,7 +66,7 @@ class GradCell(nn.Module):
 
         batch_size = latent.shape[0]
         energy = latent.new_zeros(batch_size)
-        power = latent.new_zeros(batch_size)
+        retention = latent.new_zeros(batch_size)
         loss = 100.0 + 0.1 * latent.square().mean(dim=-1)
 
         if valid_indices.numel() > 0:
@@ -83,17 +83,12 @@ class GradCell(nn.Module):
                 1200.0,
             )
             valid_energy = metrics1.specific_energy_wh_kg
-            valid_power = metrics3.specific_power_w_kg
-            valid_loss = self.objective(valid_energy, valid_power, preference[valid])
-            minimum_voltage = torch.minimum(
-                metrics1.minimum_voltage_v, metrics3.minimum_voltage_v
+            valid_retention = (
+                metrics3.delivered_capacity_ah / metrics1.delivered_capacity_ah.clamp_min(1e-8)
             )
-            voltage_penalty = torch.nn.functional.softplus(
-                (2.4 - minimum_voltage) / 0.02
-            ).square()
-            valid_loss = valid_loss + 10.0 * voltage_penalty
+            valid_loss = self.objective(valid_energy, valid_retention, preference[valid])
             energy = energy.index_copy(0, valid_indices, valid_energy)
-            power = power.index_copy(0, valid_indices, valid_power)
+            retention = retention.index_copy(0, valid_indices, valid_retention)
             loss = loss.index_copy(0, valid_indices, valid_loss)
 
         status = valid.to(torch.int64)
@@ -102,7 +97,7 @@ class GradCell(nn.Module):
             design=design,
             loss=loss,
             energy=energy,
-            power=power,
+            retention=retention,
             status=status,
         )
 
@@ -123,7 +118,7 @@ class GradCell(nn.Module):
             physics_features = torch.stack(
                 [
                     step.energy / 250.0,
-                    step.power / 800.0,
+                    step.retention,
                     step.loss,
                     step.status.to(step.loss.dtype),
                     latent.square().mean(dim=-1),

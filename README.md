@@ -1,6 +1,6 @@
 # GradCell：基于可微电池仿真的目标条件化电芯设计
 
-GradCell 是一个面向电芯逆向设计的研究原型。模型接收能量与功率之间的连续性能偏好，先预测一个满足制造约束的电芯设计，再读取 PyBaMM 提供的一阶物理敏感度，用少量梯度更新进一步改善设计。
+GradCell 是一个面向电芯逆向设计的研究原型。当前主实验接收 1C 比能量与 3C 容量保持率之间的连续性能偏好，先预测一个满足制造约束的电芯设计，再读取 PyBaMM 提供的一阶物理敏感度，用少量梯度更新进一步改善设计。3C 容量保持率定义为 `Q_3C / Q_1C`；原“1C 比能量—3C 平均比功率”在 5000 条参考数据上只产生一个 Pareto 点，已不再用作条件化训练目标。
 
 当前同时提供一条独立的电解液纯物理端到端路线：固定 Chen2020 电极与结构，网络由 CALiSol-23 配方特征直接预测有界 `log_conductivity_scale`，将其接入 PyBaMM DFN，并且只用 DFN 电压轨迹 loss 训练。Property Loss 已删除；实测电导率仅离线生成合成 DFN 目标并用于训练后诊断。DFN sensitivity 和自定义 `Jᵀv` 将电压梯度传回网络。详细流程见 `docs/第一版_固定材料电解液性质_DFN端到端实验流程.md`。
 
@@ -68,7 +68,7 @@ PyBaMM SPMe + IDAKLU forward sensitivities
     ↓
 电压轨迹和轨迹 Jacobian
     ↓
-可微能量、功率与物理约束 Loss
+可微比能量、3C 容量保持率与物理约束 Loss
     ↓
 自定义 backward 执行 Jᵀv
     ↓
@@ -105,7 +105,7 @@ python scripts/run_gradcell_exploration.py --stage verify-dfn --reference-sample
 - 解析 toy physics 后端；
 - PyBaMM SPMe + IDAKLU sensitivity 后端；
 - PyTorch 自定义 `autograd.Function`；
-- 平滑截止电压、比能量和比功率指标；
+- 平滑截止电压、比能量、可释放容量和 3C 容量保持率指标；
 - Smooth Tchebycheff 多目标损失；
 - Learned diagonal physics refiner；
 - 方向导数梯度检查；
@@ -363,7 +363,7 @@ torch.einsum("bot,botp->bp", grad_y, jacobian)
 
 ### `src/gradcell/physics/soft_metrics.py`
 
-`PerformanceMetrics` 保存比能量、比功率和平滑最低电压。
+`PerformanceMetrics` 保存比能量、平滑可释放容量、诊断用比功率和平滑最低电压。
 
 `voltage_gate(...)` 用 sigmoid 近似硬截止：
 
@@ -376,7 +376,8 @@ a(t) = sigmoid((V(t) - Vcut) / τV)
 ```text
 usable energy = ∫ I V(t) a(t) dt
 specific energy = usable energy / stack mass
-specific power = specific energy / effective discharge time
+delivered capacity = I × ∫ a(t) dt
+3C capacity retention = delivered capacity at 3C / delivered capacity at 1C
 ```
 
 最终评测仍需要运行真实硬 cutoff 仿真，以检查 smooth metric 是否产生系统性偏差。
@@ -437,7 +438,7 @@ u(k+1) = u(k) - alpha(k) × diagonal(k) × stopgrad(g(k))
 
 这是完整模型的编排层。
 
-`GradCellStep` 保存一次物理评估的 latent、设计、loss、能量、功率和 solver status。
+`GradCellStep` 保存一次物理评估的 latent、设计、loss、比能量、容量保持率和 solver status。
 
 `GradCellOutput` 保存 K+1 次评估结果，`final` 属性返回最后一步。
 
@@ -448,10 +449,9 @@ u(k+1) = u(k) - alpha(k) × diagonal(k) × stopgrad(g(k))
 1. 解码硬可行设计；
 2. 根据额定容量生成 1C 和 3C 电流；
 3. 分别调用两个物理层；
-4. 计算 1C 比能量和 3C 比功率；
+4. 计算 1C 比能量和 3C 容量保持率；
 5. 计算偏好损失；
-6. 加入欠压 penalty；
-7. 加入 solver failure recovery penalty。
+6. 对部分 solver failure 加入 recovery penalty；若整个 batch 失败则立即停止训练。
 
 `GradCell.forward(...)` 执行：
 
@@ -466,11 +466,11 @@ preference → embedding → initializer → u0 → evaluate
 
 ### `src/gradcell/losses/scalarization.py`
 
-`SmoothTchebycheff` 首先将能量和功率转成相对于 ideal/nadir 的无量纲距离：
+`SmoothTchebycheff` 首先将比能量和 3C 容量保持率转成相对于 ideal/nadir 的无量纲距离：
 
 ```text
 dE = (Eideal - E) / (Eideal - Enadir)
-dP = (Pideal - P) / (Pideal - Pnadir)
+dR = (Rideal - R3C) / (Rideal - Rnadir)
 ```
 
 偏好权重为 `[λ, 1-λ]`，最终 loss 为：
@@ -479,7 +479,7 @@ dP = (Pideal - P) / (Pideal - Pnadir)
 L = τ logsumexp(wj dj / τ) + ρ Σ wj dj
 ```
 
-当前 ideal/nadir 是初始工程值。正式实验必须从训练 split 的高预算 reference front 统计，不能使用测试数据。
+当前实验由独立的硬截止 reference 数据自动计算 ideal/nadir，并保存到 reference front。
 
 ### `src/gradcell/benchmark/regret.py`
 
@@ -502,7 +502,7 @@ R = (Lachieved - Loptimal) / (Lnominal - Loptimal + ε)
 `sample_preferences(...)` 使用混合采样：
 
 - 50% `Uniform(0,1)`；
-- 25% `Beta(0.5,2.0)`，加强功率端；
+- 25% `Beta(0.5,2.0)`，加强 3C 容量保持率端；
 - 25% `Beta(2.0,0.5)`，加强能量端。
 
 这可以减少模型只学习 Pareto front 中间区域的风险。
@@ -669,7 +669,7 @@ python scripts\validate_gradients.py --backend pybamm --eps 1e-5
 
 | 变量 | 形状 | 含义 |
 |---|---|---|
-| `preference` | `[B]` 或 `[B,1]` | 能量–功率偏好 |
+| `preference` | `[B]` 或 `[B,1]` | 比能量–3C 容量保持率偏好 |
 | `task_embedding` | `[B,128]` | 任务表示 |
 | `latent` | `[B,5]` | 无约束结构设计 |
 | `physics_inputs` | `[B,8]` | PyBaMM 输入和电流 |
@@ -695,12 +695,11 @@ PyBaMM 提供 `∂y/∂p`，自定义 backward 完成 `Jᵀv`，其他部分由 
 1. YAML 尚未通过统一 loader 自动注入所有类；
 2. PyBaMM batch 当前逐样本循环；
 3. 当前只输出电压，尚未加入电解液浓度和表面化学计量比；
-4. ideal/nadir 尚未由 reference front 自动计算；
-5. 尚未实现高预算 Pareto reference；
+4. reference front 仍是有限随机搜索近似，而非全局最优证明；
 6. 尚未实现 NSGA-II、CMA-ES、BO 和 exact-gradient baseline；
 7. 尚未实现 Preference-OOD split；
-8. 尚未实现验证集、早停、断点恢复和结构化日志；
-9. 尚未实现 DFN 统一复核；
+8. 已支持验证、早停、断点和结构化日志，但尚未完成正式多 seed 汇总；
+9. 已提供 DFN 统一复核入口，但尚无正式复核实验结论；
 10. 尚未接入真实电芯实验数据；
 11. 质量模型仍是 stack-level proxy；
 12. solver failure 的恢复梯度主要来自 latent-to-nominal barrier。

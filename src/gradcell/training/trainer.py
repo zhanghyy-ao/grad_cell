@@ -80,6 +80,12 @@ def train(
         preference = sample_preferences(batch_size, dtype=dtype, device=device)
         optimizer.zero_grad(set_to_none=True)
         output = model(preference, num_steps=refinement_steps)
+        success_rate = float(output.final.status.double().mean().detach())
+        if success_rate == 0.0:
+            raise RuntimeError(
+                "All 1C/3C physics simulations failed; training was stopped to avoid "
+                "the zero-gradient failure penalty. Inspect backend diagnostics."
+            )
         intermediate = torch.stack([step.loss for step in output.steps], dim=0)
         loss = intermediate.mean()
         if len(output.steps) > 1:
@@ -106,34 +112,47 @@ def train(
         torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
         optimizer.step()
         losses.append(float(loss.detach()))
-        record = {"step": iteration, "train_loss": losses[-1]}
+        record = {
+            "step": iteration,
+            "train_loss": losses[-1],
+            "physics_success_rate": success_rate,
+        }
         if validation_interval and iteration % validation_interval == 0:
             model.eval()
             # Refinement evaluates d(loss)/d(latent) internally, including at validation time.
             # Keep autograd enabled here; no backward pass is performed on the validation graph.
             with torch.enable_grad():
                 val_output = model(validation_preferences, num_steps=refinement_steps)
-                val_loss = float(torch.stack([step.loss for step in val_output.steps]).mean())
+                val_loss = float(
+                    torch.stack([step.loss for step in val_output.steps]).mean().detach()
+                )
             model.train()
             validation_losses.append(val_loss)
             record["validation_loss"] = val_loss
             if val_loss < best_validation_loss - min_delta:
                 best_validation_loss, best_step, stale_steps = val_loss, iteration, 0
                 best_model_state = {
-                    key: value.detach().cpu().clone()
-                    for key, value in model.state_dict().items()
+                    key: value.detach().cpu().clone() for key, value in model.state_dict().items()
                 }
             else:
                 stale_steps += validation_interval
             if checkpoint_path is not None:
                 path = Path(checkpoint_path)
                 path.parent.mkdir(parents=True, exist_ok=True)
-                torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
-                             "step": iteration, "losses": losses,
-                             "validation_losses": validation_losses,
-                             "best_validation_loss": best_validation_loss,
-                             "best_step": best_step, "stale_steps": stale_steps,
-                             "best_model_state": best_model_state}, path)
+                torch.save(
+                    {
+                        "model": model.state_dict(),
+                        "optimizer": optimizer.state_dict(),
+                        "step": iteration,
+                        "losses": losses,
+                        "validation_losses": validation_losses,
+                        "best_validation_loss": best_validation_loss,
+                        "best_step": best_step,
+                        "stale_steps": stale_steps,
+                        "best_model_state": best_model_state,
+                    },
+                    path,
+                )
             if early_stopping_patience is not None and stale_steps >= early_stopping_patience:
                 stopped_early = True
         emit(record)

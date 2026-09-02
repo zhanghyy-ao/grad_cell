@@ -40,7 +40,7 @@ def main() -> None:
         latent = arrays["latent"].copy()
         spme_status = arrays["status"].copy()
         spme_energy = arrays["energy_wh_kg"].copy()
-        spme_power = arrays["power_w_kg"].copy()
+        spme_retention = arrays["capacity_retention_3c"].copy()
     indices = evenly_spaced_indices(len(preferences), args.max_candidates)
     dfn = hard_cutoff_metrics(
         torch.from_numpy(latent[indices]).double(),
@@ -52,7 +52,7 @@ def main() -> None:
     )
     valid = (spme_status[indices] == 1) & (dfn["status"] == 1)
     energy_error = relative_error(dfn["energy_wh_kg"], spme_energy[indices])
-    power_error = relative_error(dfn["power_w_kg"], spme_power[indices])
+    retention_error = relative_error(dfn["capacity_retention_3c"], spme_retention[indices])
     report = {
         "source_candidates": str(args.candidates),
         "selected_candidates": len(indices),
@@ -61,8 +61,10 @@ def main() -> None:
         "median_relative_energy_error": float(np.median(energy_error[valid]))
         if valid.any()
         else None,
-        "mean_relative_power_error": float(power_error[valid].mean()) if valid.any() else None,
-        "median_relative_power_error": float(np.median(power_error[valid]))
+        "mean_relative_retention_error": float(retention_error[valid].mean())
+        if valid.any()
+        else None,
+        "median_relative_retention_error": float(np.median(retention_error[valid]))
         if valid.any()
         else None,
     }
@@ -76,10 +78,10 @@ def main() -> None:
         dfn_status=dfn["status"],
         spme_energy_wh_kg=spme_energy[indices],
         dfn_energy_wh_kg=dfn["energy_wh_kg"],
-        spme_power_w_kg=spme_power[indices],
-        dfn_power_w_kg=dfn["power_w_kg"],
+        spme_capacity_retention_3c=spme_retention[indices],
+        dfn_capacity_retention_3c=dfn["capacity_retention_3c"],
         relative_energy_error=energy_error,
-        relative_power_error=power_error,
+        relative_retention_error=retention_error,
     )
     (args.output_dir / "metrics.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2), flush=True)

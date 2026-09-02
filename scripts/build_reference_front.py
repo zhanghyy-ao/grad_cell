@@ -7,21 +7,21 @@ from pathlib import Path
 import numpy as np
 
 
-def pareto_mask(energy: np.ndarray, power: np.ndarray) -> np.ndarray:
+def pareto_mask(energy: np.ndarray, retention: np.ndarray) -> np.ndarray:
     """Return the non-dominated mask for two objectives that are both maximized."""
-    order = np.lexsort((-power, -energy))
+    order = np.lexsort((-retention, -energy))
     keep = np.zeros(len(energy), dtype=bool)
-    best_power = -np.inf
+    best_retention = -np.inf
     for index in order:
-        if power[index] > best_power:
+        if retention[index] > best_retention:
             keep[index] = True
-            best_power = power[index]
+            best_retention = retention[index]
     return keep
 
 
 def scalarized_loss(
     energy: np.ndarray,
-    power: np.ndarray,
+    retention: np.ndarray,
     preference: float,
     bounds: dict[str, float],
     temperature: float = 0.05,
@@ -31,8 +31,8 @@ def scalarized_loss(
         [
             (bounds["energy_ideal"] - energy)
             / max(bounds["energy_ideal"] - bounds["energy_nadir"], 1e-12),
-            (bounds["power_ideal"] - power)
-            / max(bounds["power_ideal"] - bounds["power_nadir"], 1e-12),
+            (bounds["retention_ideal"] - retention)
+            / max(bounds["retention_ideal"] - bounds["retention_nadir"], 1e-12),
         ],
         axis=-1,
     )
@@ -62,30 +62,33 @@ def main() -> None:
         metadata = json.loads(str(arrays["metadata"]))
     fields = list(metadata["target_fields"])
     energy_name = "specific_energy_1c_wh_kg"
-    power_name = "specific_power_3c_w_kg"
-    if energy_name not in fields or power_name not in fields:
-        raise ValueError("Dataset lacks hard-cutoff energy or power targets")
+    capacity_1c_name = "delivered_capacity_1c_ah"
+    capacity_3c_name = "delivered_capacity_3c_ah"
+    if any(name not in fields for name in (energy_name, capacity_1c_name, capacity_3c_name)):
+        raise ValueError("Dataset lacks energy or 1C/3C delivered-capacity targets")
     energy = targets[:, fields.index(energy_name)]
-    power = targets[:, fields.index(power_name)]
-    finite = np.isfinite(energy) & np.isfinite(power)
+    capacity_1c = targets[:, fields.index(capacity_1c_name)]
+    capacity_3c = targets[:, fields.index(capacity_3c_name)]
+    retention = capacity_3c / np.maximum(capacity_1c, 1e-12)
+    finite = np.isfinite(energy) & np.isfinite(retention) & (capacity_1c > 0.0)
     if finite.sum() < 2:
         raise RuntimeError("Fewer than two finite energy-power samples")
     source_indices = np.flatnonzero(finite)
-    mask = pareto_mask(energy[finite], power[finite])
+    mask = pareto_mask(energy[finite], retention[finite])
     front_indices = source_indices[mask]
     front_order = np.argsort(energy[front_indices])
     front_indices = front_indices[front_order]
     bounds = {
         "energy_ideal": float(energy[finite].max()),
         "energy_nadir": float(energy[finite].min()),
-        "power_ideal": float(power[finite].max()),
-        "power_nadir": float(power[finite].min()),
+        "retention_ideal": float(retention[finite].max()),
+        "retention_nadir": float(retention[finite].min()),
     }
     preferences = np.linspace(0.0, 1.0, args.preference_points)
     best_indices = []
     best_losses = []
     for preference in preferences:
-        loss = scalarized_loss(energy[finite], power[finite], float(preference), bounds)
+        loss = scalarized_loss(energy[finite], retention[finite], float(preference), bounds)
         local_index = int(np.argmin(loss))
         best_indices.append(int(source_indices[local_index]))
         best_losses.append(float(loss[local_index]))
@@ -98,8 +101,17 @@ def main() -> None:
         "pareto_samples": len(front_indices),
         "bounds": bounds,
         "preference_points": args.preference_points,
-        "selection": "maximize hard-cutoff 1C specific energy and 3C specific power",
+        "primary_objective": "specific_energy_1c_wh_kg",
+        "secondary_objective": "capacity_retention_3c",
+        "capacity_retention_definition": "delivered_capacity_3c_ah / delivered_capacity_1c_ah",
+        "objective_correlation": float(np.corrcoef(energy[finite], retention[finite])[0, 1]),
+        "selection": "maximize hard-cutoff 1C specific energy and 3C capacity retention",
     }
+    if len(front_indices) < 3:
+        raise RuntimeError(
+            f"Reference front has only {len(front_indices)} non-dominated points; "
+            "the objectives or design space do not provide a usable trade-off"
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         args.output,
@@ -107,7 +119,7 @@ def main() -> None:
         latent=latent[front_indices],
         design=design[front_indices],
         energy_wh_kg=energy[front_indices],
-        power_w_kg=power[front_indices],
+        capacity_retention_3c=retention[front_indices],
         preferences=preferences,
         scalarized_best_source_indices=np.asarray(best_indices, dtype=np.int64),
         scalarized_best_losses=np.asarray(best_losses),

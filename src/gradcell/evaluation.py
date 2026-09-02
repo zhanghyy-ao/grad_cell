@@ -83,6 +83,8 @@ def hard_cutoff_metrics(
         "reference_capacity_ah": reference_capacity,
         "energy_wh_kg": result_1c.delivered_energy_wh / mass,
         "power_w_kg": result_3c.delivered_energy_wh / duration_3c_h / mass,
+        "capacity_retention_3c": result_3c.delivered_capacity_ah
+        / np.maximum(result_1c.delivered_capacity_ah, 1e-12),
         "capacity_1c_ah": result_1c.delivered_capacity_ah,
         "capacity_3c_ah": result_3c.delivered_capacity_ah,
         "time_1c_s": result_1c.discharge_time_s,
@@ -92,7 +94,7 @@ def hard_cutoff_metrics(
 
 def scalarized_loss(
     energy: np.ndarray,
-    power: np.ndarray,
+    retention: np.ndarray,
     preferences: np.ndarray,
     bounds: dict[str, float],
 ) -> np.ndarray:
@@ -100,7 +102,7 @@ def scalarized_loss(
     with torch.no_grad():
         values = objective(
             torch.from_numpy(np.asarray(energy)).double(),
-            torch.from_numpy(np.asarray(power)).double(),
+            torch.from_numpy(np.asarray(retention)).double(),
             torch.from_numpy(np.asarray(preferences)).double(),
         )
     return values.numpy()

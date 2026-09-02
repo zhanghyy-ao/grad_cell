@@ -52,7 +52,10 @@ def first_nonfinite_stage(diagnostics: dict) -> str | None:
         ("voltage_1c", diagnostics["voltage_1c"]["all_finite"]),
         ("voltage_3c", diagnostics["voltage_3c"]["all_finite"]),
         ("energy_1c", diagnostics["metrics"]["energy_1c_wh_kg"] is not None),
-        ("power_3c", diagnostics["metrics"]["power_3c_w_kg"] is not None),
+        (
+            "capacity_retention_3c",
+            diagnostics["metrics"]["capacity_retention_3c"] is not None,
+        ),
         ("minimum_voltage_1c", diagnostics["metrics"]["minimum_voltage_1c_v"] is not None),
         ("minimum_voltage_3c", diagnostics["metrics"]["minimum_voltage_3c_v"] is not None),
         ("loss", diagnostics["loss"] is not None),
@@ -128,7 +131,7 @@ def main() -> None:
             )
             loss = objective(
                 metrics_1c.specific_energy_wh_kg,
-                metrics_3c.specific_power_w_kg,
+                metrics_3c.delivered_capacity_ah / metrics_1c.delivered_capacity_ah.clamp_min(1e-8),
                 preference,
             ).mean()
             diagnostics = {
@@ -151,7 +154,10 @@ def main() -> None:
                 "voltage_3c": tensor_diagnostics(voltage_3c),
                 "metrics": {
                     "energy_1c_wh_kg": safe_float(metrics_1c.specific_energy_wh_kg[0]),
-                    "power_3c_w_kg": safe_float(metrics_3c.specific_power_w_kg[0]),
+                    "capacity_retention_3c": safe_float(
+                        metrics_3c.delivered_capacity_ah[0]
+                        / metrics_1c.delivered_capacity_ah[0].clamp_min(1e-8)
+                    ),
                     "minimum_voltage_1c_v": safe_float(metrics_1c.minimum_voltage_v[0]),
                     "minimum_voltage_3c_v": safe_float(metrics_3c.minimum_voltage_v[0]),
                 },
@@ -185,8 +191,7 @@ def main() -> None:
             if diagnostics["first_nonfinite_stage"] is not None:
                 invalid_samples.append(sample_index)
                 run.log(
-                    f"sample={sample_index} invalid at "
-                    f"{diagnostics['first_nonfinite_stage']}",
+                    f"sample={sample_index} invalid at {diagnostics['first_nonfinite_stage']}",
                     level="WARNING",
                 )
                 continue

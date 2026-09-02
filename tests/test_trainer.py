@@ -1,8 +1,10 @@
+import pytest
 import torch
 
 from gradcell.models import GradCell
 from gradcell.physics import AnalyticToyBackend, DifferentiablePhysicsLayer
 from gradcell.training.trainer import train
+from tests.test_model import ControlledFailureBackend
 
 
 def build_model() -> GradCell:
@@ -44,3 +46,12 @@ def test_training_restores_best_validation_state(tmp_path):
     assert saved["best_model_state"] is not None
     for name, value in model.state_dict().items():
         assert torch.equal(value.cpu(), saved["best_model_state"][name])
+
+
+def test_training_stops_when_all_physics_samples_fail():
+    model = GradCell(
+        DifferentiablePhysicsLayer(ControlledFailureBackend(fail_all=True)),
+        DifferentiablePhysicsLayer(ControlledFailureBackend(fail_all=True)),
+    ).double()
+    with pytest.raises(RuntimeError, match="All 1C/3C physics simulations failed"):
+        train(model, steps=1, batch_size=2, validation_interval=0)

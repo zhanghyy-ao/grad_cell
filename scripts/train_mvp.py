@@ -75,6 +75,21 @@ def main() -> None:
             design_space=DesignSpace(capacity_formula=args.capacity_formula),
             objective=objective,
         ).double()
+        preflight_preferences = torch.tensor([0.0, 0.5, 1.0], dtype=torch.float64)
+        with torch.enable_grad():
+            preflight = model(preflight_preferences, num_steps=0).final
+        preflight_summary = {
+            "preferences": preflight_preferences.tolist(),
+            "status": preflight.status.tolist(),
+            "loss": preflight.loss.detach().tolist(),
+            "energy_wh_kg": preflight.energy.detach().tolist(),
+            "capacity_retention_3c": preflight.retention.detach().tolist(),
+        }
+        run.event("physics_preflight", **preflight_summary)
+        if not bool(preflight.status.bool().all()):
+            raise RuntimeError(
+                "GradCell physics preflight failed for one or more canonical preferences"
+            )
         run.event("training_started", parameter_count=sum(p.numel() for p in model.parameters()))
         result = train(
             model,
