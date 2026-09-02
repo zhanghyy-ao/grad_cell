@@ -52,6 +52,8 @@ python scripts/run_gradcell_exploration.py \
 输出 `results/gradcell_exploration/reference/pareto_front.npz`。其中的 ideal/nadir
 用于统一归一化比能量与容量保持率，避免某一个目标仅因数值尺度更大而主导 Loss。
 脚本会拒绝少于 3 个非支配点的前沿，防止在不存在有效权衡时继续训练。
+该阶段还会从低倍率标定容量与解析容量的比值估计 `capacity_multiplier`。训练、checkpoint
+和评估统一读取这个系数，确保训练所称的 1C/3C 与参考数据使用相同容量基准。
 
 ## 3. 训练 K=0 初始化器
 

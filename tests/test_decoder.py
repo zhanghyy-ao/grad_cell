@@ -41,6 +41,13 @@ def test_chen2020_scaled_capacity_is_more_conservative_in_current_design_range()
     assert torch.all(scaled.nominal_capacity_ah < theoretical.nominal_capacity_ah)
 
 
+def test_capacity_multiplier_scales_current_capacity():
+    latent = torch.zeros(2, 5, dtype=torch.float64)
+    base = DesignSpace(capacity_formula="chen2020_scaled")(latent)
+    calibrated = DesignSpace(capacity_formula="chen2020_scaled", capacity_multiplier=1.25)(latent)
+    torch.testing.assert_close(calibrated.nominal_capacity_ah, 1.25 * base.nominal_capacity_ah)
+
+
 def test_chen2020_diffusivities_are_fixed_material_properties():
     decoder = DesignSpace()
     design = decoder(torch.randn(64, decoder.latent_dim, dtype=torch.float64))

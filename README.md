@@ -92,6 +92,8 @@ python scripts/run_gradcell_exploration.py --stage verify-dfn --reference-sample
 
 每一步的实验目的、判据和服务器命令见
 [`docs/GradCell初探_分阶段实验执行.md`](docs/GradCell初探_分阶段实验执行.md)。
+参考前沿同时保存由低倍率 PyBaMM 标定得到的容量乘子；GradCell 训练使用该乘子定义
+1C/3C 电流，避免解析标称容量与硬截止参考容量不一致而造成目标尺度错位。
 
 ## 1. 当前实现范围
 

@@ -15,9 +15,13 @@ def hard_cutoff_metrics(
     time_points: int = 151,
     calibration_rate: float = 0.1,
     calibration_iterations: int = 2,
+    capacity_multiplier: float = 1.0,
 ) -> dict[str, np.ndarray]:
     """Evaluate decoded designs with physical voltage cutoffs enabled."""
-    decoder = DesignSpace(capacity_formula=capacity_formula)
+    decoder = DesignSpace(
+        capacity_formula=capacity_formula,
+        capacity_multiplier=capacity_multiplier,
+    )
     design = decoder(latent.detach().cpu())
     base = design.physics_tensor(1.0).detach().numpy()
     mass = design.stack_mass_kg.detach().numpy()

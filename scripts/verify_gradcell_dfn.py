@@ -27,6 +27,7 @@ def main() -> None:
     parser.add_argument("--candidates", type=Path, required=True)
     parser.add_argument("--max-candidates", type=int, default=11)
     parser.add_argument("--capacity-formula", default="chen2020_scaled")
+    parser.add_argument("--capacity-multiplier", type=float)
     parser.add_argument("--time-points", type=int, default=151)
     parser.add_argument("--calibration-rate", type=float, default=0.1)
     parser.add_argument("--calibration-iterations", type=int, default=2)
@@ -41,6 +42,12 @@ def main() -> None:
         spme_status = arrays["status"].copy()
         spme_energy = arrays["energy_wh_kg"].copy()
         spme_retention = arrays["capacity_retention_3c"].copy()
+        saved_capacity_multiplier = (
+            float(arrays["capacity_multiplier"]) if "capacity_multiplier" in arrays.files else 1.0
+        )
+    capacity_multiplier = (
+        saved_capacity_multiplier if args.capacity_multiplier is None else args.capacity_multiplier
+    )
     indices = evenly_spaced_indices(len(preferences), args.max_candidates)
     dfn = hard_cutoff_metrics(
         torch.from_numpy(latent[indices]).double(),
@@ -49,6 +56,7 @@ def main() -> None:
         args.time_points,
         args.calibration_rate,
         args.calibration_iterations,
+        capacity_multiplier,
     )
     valid = (spme_status[indices] == 1) & (dfn["status"] == 1)
     energy_error = relative_error(dfn["energy_wh_kg"], spme_energy[indices])

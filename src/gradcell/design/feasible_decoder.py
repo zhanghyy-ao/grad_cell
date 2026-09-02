@@ -16,16 +16,16 @@ from .mass_model import MassConstants, stack_mass_kg
 
 @dataclass(frozen=True)
 class CellDesign:
-    eps_p: torch.Tensor          # 正极孔隙率
-    eps_n: torch.Tensor          # 负极孔隙率
-    eps_s: torch.Tensor          # 隔膜孔隙率
-    phi_p: torch.Tensor          # 正极活性材料体积分数
-    phi_n: torch.Tensor          # 负极活性材料体积分数
-    np_ratio: torch.Tensor       # NP比（负极容量/正极容量）
+    eps_p: torch.Tensor  # 正极孔隙率
+    eps_n: torch.Tensor  # 负极孔隙率
+    eps_s: torch.Tensor  # 隔膜孔隙率
+    phi_p: torch.Tensor  # 正极活性材料体积分数
+    phi_n: torch.Tensor  # 负极活性材料体积分数
+    np_ratio: torch.Tensor  # NP比（负极容量/正极容量）
     diffusivity_p_multiplier: torch.Tensor  # 正极扩散系数乘子
     diffusivity_n_multiplier: torch.Tensor  # 负极扩散系数乘子
-    nominal_capacity_ah: torch.Tensor       # 标称容量（Ah）
-    stack_mass_kg: torch.Tensor             # 电堆质量（kg）
+    nominal_capacity_ah: torch.Tensor  # 标称容量（Ah）
+    stack_mass_kg: torch.Tensor  # 电堆质量（kg）
 
     def physics_tensor(self, c_rate: float) -> torch.Tensor:
         current_a = self.nominal_capacity_ah * c_rate
@@ -63,6 +63,7 @@ class DesignSpace(nn.Module):
         inactive_p_min=0.03,
         inactive_n_min=0.03,
         capacity_formula: str = "electrode_theoretical",
+        capacity_multiplier: float = 1.0,
     ) -> None:
         super().__init__()
         self.eps_p_bounds = eps_p_bounds
@@ -75,6 +76,9 @@ class DesignSpace(nn.Module):
         if capacity_formula not in ("electrode_theoretical", "chen2020_scaled"):
             raise ValueError(f"Unknown capacity formula: {capacity_formula}")
         self.capacity_formula = capacity_formula
+        if capacity_multiplier <= 0.0:
+            raise ValueError("capacity_multiplier must be positive")
+        self.capacity_multiplier = capacity_multiplier
         self.capacity_constants = CapacityConstants()
         self.mass_constants = MassConstants()
 
@@ -106,10 +110,10 @@ class DesignSpace(nn.Module):
         max_from_negative = (1.0 - eps_n - self.inactive_n_min) / kappa
         phi_p_max = torch.minimum(max_from_positive, max_from_negative)
         if torch.any(phi_p_max <= self.phi_p_min):
-            raise RuntimeError("Configured design bounds contain no feasible active-fraction interval")
-        phi_p = self.phi_p_min + torch.sigmoid(latent[..., 3]) * (
-            phi_p_max - self.phi_p_min
-        )
+            raise RuntimeError(
+                "Configured design bounds contain no feasible active-fraction interval"
+            )
+        phi_p = self.phi_p_min + torch.sigmoid(latent[..., 3]) * (phi_p_max - self.phi_p_min)
         phi_n = negative_active_fraction(phi_p, np_ratio, self.capacity_constants)
         diffusivity_p_multiplier = torch.ones_like(phi_p)
         diffusivity_n_multiplier = torch.ones_like(phi_n)
@@ -117,9 +121,8 @@ class DesignSpace(nn.Module):
             capacity = nominal_capacity_ah(phi_p, self.capacity_constants)
         else:
             capacity = chen2020_scaled_capacity_ah(phi_p)
-        mass = stack_mass_kg(
-            eps_p, eps_n, eps_s, phi_p, phi_n, self.mass_constants
-        )
+        capacity = capacity * self.capacity_multiplier
+        mass = stack_mass_kg(eps_p, eps_n, eps_s, phi_p, phi_n, self.mass_constants)
         return CellDesign(
             eps_p=eps_p,
             eps_n=eps_n,

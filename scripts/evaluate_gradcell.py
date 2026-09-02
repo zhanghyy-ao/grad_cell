@@ -34,6 +34,7 @@ def main() -> None:
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = checkpoint.get("model_config", {})
     capacity_formula = config.get("capacity_formula", "chen2020_scaled")
+    capacity_multiplier = float(config.get("capacity_multiplier", 1.0))
     training_model = config.get("physics_model", "SPMe")
     refinement_steps = (
         int(config.get("refinement_steps", 0))
@@ -60,7 +61,10 @@ def main() -> None:
     model = GradCell(
         DifferentiablePhysicsLayer(backend_1c),
         DifferentiablePhysicsLayer(backend_3c),
-        design_space=DesignSpace(capacity_formula=capacity_formula),
+        design_space=DesignSpace(
+            capacity_formula=capacity_formula,
+            capacity_multiplier=capacity_multiplier,
+        ),
         objective=objective,
     ).double()
     model.load_state_dict(checkpoint["model"])
@@ -76,6 +80,7 @@ def main() -> None:
         args.time_points,
         args.calibration_rate,
         args.calibration_iterations,
+        capacity_multiplier,
     )
     nominal_latent = torch.zeros((1, latent.shape[1]), dtype=latent.dtype)
     nominal = hard_cutoff_metrics(
@@ -85,6 +90,7 @@ def main() -> None:
         args.time_points,
         args.calibration_rate,
         args.calibration_iterations,
+        capacity_multiplier,
     )
     candidate_loss = scalarized_loss(
         candidate["energy_wh_kg"], candidate["capacity_retention_3c"], preferences, bounds
@@ -111,6 +117,7 @@ def main() -> None:
         "training_model": training_model,
         "evaluation_model": args.evaluation_model,
         "capacity_formula": capacity_formula,
+        "capacity_multiplier": capacity_multiplier,
         "refinement_steps": refinement_steps,
         "preference_points": args.preference_points,
         "success_rate": float(valid.mean()),
@@ -130,6 +137,7 @@ def main() -> None:
     np.savez_compressed(
         args.output_dir / "candidates.npz",
         preferences=preferences,
+        capacity_multiplier=np.asarray(capacity_multiplier),
         latent=latent.numpy(),
         status=candidate["status"],
         energy_wh_kg=candidate["energy_wh_kg"],

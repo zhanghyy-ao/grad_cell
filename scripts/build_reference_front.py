@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 
 import numpy as np
+import torch
+
+from gradcell.design import DesignSpace
 
 
 def pareto_mask(energy: np.ndarray, retention: np.ndarray) -> np.ndarray:
@@ -61,6 +64,7 @@ def main() -> None:
         targets = arrays["targets"].copy()
         metadata = json.loads(str(arrays["metadata"]))
     fields = list(metadata["target_fields"])
+    design_fields = list(metadata["design_fields"])
     energy_name = "specific_energy_1c_wh_kg"
     capacity_1c_name = "delivered_capacity_1c_ah"
     capacity_3c_name = "delivered_capacity_3c_ah"
@@ -70,6 +74,14 @@ def main() -> None:
     capacity_1c = targets[:, fields.index(capacity_1c_name)]
     capacity_3c = targets[:, fields.index(capacity_3c_name)]
     retention = capacity_3c / np.maximum(capacity_1c, 1e-12)
+    reference_capacity = design[:, design_fields.index("reference_capacity_ah")]
+    capacity_formula = metadata.get("capacity_formula", "chen2020_scaled")
+    with torch.no_grad():
+        analytic_capacity = DesignSpace(capacity_formula=capacity_formula)(
+            torch.from_numpy(latent).double()
+        ).nominal_capacity_ah.numpy()
+    capacity_ratios = reference_capacity / np.maximum(analytic_capacity, 1e-12)
+    capacity_multiplier = float(np.median(capacity_ratios))
     finite = np.isfinite(energy) & np.isfinite(retention) & (capacity_1c > 0.0)
     if finite.sum() < 2:
         raise RuntimeError("Fewer than two finite energy-power samples")
@@ -105,6 +117,11 @@ def main() -> None:
         "secondary_objective": "capacity_retention_3c",
         "capacity_retention_definition": "delivered_capacity_3c_ah / delivered_capacity_1c_ah",
         "objective_correlation": float(np.corrcoef(energy[finite], retention[finite])[0, 1]),
+        "capacity_formula": capacity_formula,
+        "capacity_multiplier": capacity_multiplier,
+        "capacity_multiplier_relative_spread": float(
+            np.std(capacity_ratios) / max(abs(capacity_multiplier), 1e-12)
+        ),
         "selection": "maximize hard-cutoff 1C specific energy and 3C capacity retention",
     }
     if len(front_indices) < 3:

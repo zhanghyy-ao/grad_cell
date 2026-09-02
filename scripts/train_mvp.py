@@ -45,12 +45,15 @@ def main() -> None:
         torch.manual_seed(args.seed)
         objective = None
         objective_bounds = None
+        capacity_multiplier = 1.0
         if args.reference_front is not None:
             with np.load(args.reference_front, allow_pickle=False) as arrays:
                 front_metadata = json.loads(str(arrays["metadata"]))
             objective_bounds = front_metadata["bounds"]
+            capacity_multiplier = float(front_metadata.get("capacity_multiplier", 1.0))
             objective = SmoothTchebycheff(**objective_bounds)
             run.log(f"objective bounds loaded from {args.reference_front}: {objective_bounds}")
+            run.log(f"capacity multiplier loaded from reference data: {capacity_multiplier}")
         run.log(
             f"building {args.backend}/{args.model} 1C/3C backends; "
             f"capacity_formula={args.capacity_formula}"
@@ -72,7 +75,10 @@ def main() -> None:
         model = GradCell(
             DifferentiablePhysicsLayer(backend1),
             DifferentiablePhysicsLayer(backend3),
-            design_space=DesignSpace(capacity_formula=args.capacity_formula),
+            design_space=DesignSpace(
+                capacity_formula=args.capacity_formula,
+                capacity_multiplier=capacity_multiplier,
+            ),
             objective=objective,
         ).double()
         preflight_preferences = torch.tensor([0.0, 0.5, 1.0], dtype=torch.float64)
@@ -116,6 +122,7 @@ def main() -> None:
                     "backend": args.backend,
                     "physics_model": args.model,
                     "capacity_formula": args.capacity_formula,
+                    "capacity_multiplier": capacity_multiplier,
                     "current_ramp_time_s": args.current_ramp_time_s,
                     "reference_front": str(args.reference_front)
                     if args.reference_front is not None
