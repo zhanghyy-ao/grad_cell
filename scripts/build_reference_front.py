@@ -46,8 +46,8 @@ def scalarized_loss(
         np.exp((weighted - maximum) / temperature).sum(axis=-1)
     )
     constraint = (
-        np.maximum(bounds["retention_5c_min"] - retention_5c, 0.0) ** 2
-        + np.maximum(bounds["retention_6c_min"] - retention_6c, 0.0) ** 2
+        np.maximum(bounds["retention_5c_min"] - retention_5c, 0.0)
+        + np.maximum(bounds["retention_6c_min"] - retention_6c, 0.0)
     )
     return smooth_max + augmented_weight * weighted.sum(axis=-1) + bounds["constraint_weight"] * constraint
 
@@ -59,9 +59,9 @@ def main() -> None:
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--preference-points", type=int, default=21)
-    parser.add_argument("--retention-5c-min", type=float, default=0.55)
-    parser.add_argument("--retention-6c-min", type=float, default=0.45)
-    parser.add_argument("--constraint-weight", type=float, default=2.0)
+    parser.add_argument("--retention-5c-min", type=float, default=0.50)
+    parser.add_argument("--retention-6c-min", type=float, default=0.44)
+    parser.add_argument("--constraint-weight", type=float, default=5.0)
     args = parser.parse_args()
     if args.preference_points < 2:
         parser.error("--preference-points must be at least 2")

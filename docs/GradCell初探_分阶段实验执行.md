@@ -49,14 +49,14 @@ python scripts/run_gradcell_exploration.py \
   --reference-samples 5000 \
   --reference-seed 101 \
   --preference-points 21 \
-  --retention-5c-min 0.55 \
-  --retention-6c-min 0.45 \
-  --constraint-weight 2.0
+  --retention-5c-min 0.50 \
+  --retention-6c-min 0.44 \
+  --constraint-weight 5.0
 ```
 
 输出 `results/gradcell_exploration/reference/pareto_front_1c5c6c.npz`。Pareto 目标为
-1C 比能量和 `min(E5C/E1C, E6C/E1C)`，且只保留满足 `E5C/E1C >= 0.55`、
-`E6C/E1C >= 0.45` 的样本。其中的 ideal/nadir 用于统一目标尺度。
+1C 比能量和 `min(E5C/E1C, E6C/E1C)`，且只保留满足 `E5C/E1C >= 0.50`、
+`E6C/E1C >= 0.44` 的样本。其中的 ideal/nadir 用于统一目标尺度。
 脚本会拒绝少于 3 个非支配点的前沿，防止在不存在有效权衡时继续训练。
 该阶段还会从低倍率标定容量与解析容量的比值估计 `capacity_multiplier`。训练、checkpoint
 和评估统一读取这个系数，确保训练所称的 1C/5C/6C 与参考数据使用相同容量基准。
@@ -64,11 +64,11 @@ python scripts/run_gradcell_exploration.py \
 训练损失为增广平滑 Tchebycheff 项加约束惩罚：
 
 \[
-L=L_{\mathrm{Tch}}+\gamma\left[\operatorname{ReLU}(r_{5,\min}-R_5)^2+
-\operatorname{ReLU}(r_{6,\min}-R_6)^2\right].
+L=L_{\mathrm{Tch}}+\gamma\left[\operatorname{ReLU}(r_{5,\min}-R_5)+
+\operatorname{ReLU}(r_{6,\min}-R_6)\right].
 \]
 
-默认 `r5_min=0.55`、`r6_min=0.45`、`gamma=2.0`。若可行样本少于 2 个，先报告
+默认 `r5_min=0.50`、`r6_min=0.44`、`gamma=5.0`。线性 hinge 在接近约束边界时仍保持非零梯度。若可行样本少于 2 个，先报告
 5C/6C 分位数，再调整阈值，不应绕过可行性检查。
 
 ## 3. 训练 K=0 初始化器

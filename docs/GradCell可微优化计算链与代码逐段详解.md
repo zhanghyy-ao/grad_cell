@@ -14,7 +14,7 @@ GradCell 学习的是一个“偏好条件化的电芯设计优化器”：输�
 \boxed{\text{1C 比能量}\quad\text{与}\quad\min(E_{5C}/E_{1C},E_{6C}/E_{1C})}
 \]
 
-同时施加 \(E_{5C}/E_{1C}\ge0.55\) 和 \(E_{6C}/E_{1C}\ge0.45\) 的默认约束。3C 数据仍生成用于诊断，但不进入主 Loss。
+同时施加 \(E_{5C}/E_{1C}\ge0.50\) 和 \(E_{6C}/E_{1C}\ge0.44\) 的默认约束。3C 数据仍生成用于诊断，但不进入主 Loss。
 
 ```mermaid
 flowchart LR
@@ -402,8 +402,8 @@ L_{\mathrm{Tch}}=\tau\log\left[
 
 \[
 L=L_{\mathrm{Tch}}+\gamma\left[
-\operatorname{ReLU}(r_{5,\min}-R_5)^2+
-\operatorname{ReLU}(r_{6,\min}-R_6)^2\right].
+\operatorname{ReLU}(r_{5,\min}-R_5)+
+\operatorname{ReLU}(r_{6,\min}-R_6)\right].
 \]
 
 ```python
@@ -413,14 +413,14 @@ smooth_max = self.temperature * torch.logsumexp(
     weighted / self.temperature, dim=-1
 )
 constraint = (
-    torch.relu(self.retention_5c_min - retention_5c).square()
-    + torch.relu(self.retention_6c_min - retention_6c).square()
+    torch.relu(self.retention_5c_min - retention_5c)
+    + torch.relu(self.retention_6c_min - retention_6c)
 )
 return smooth_max + self.augmented_weight * weighted.sum(dim=-1) \
     + self.constraint_weight * constraint
 ```
 
-默认 \(\tau=0.05\)、\(\rho=0.05\)、\(r_{5,\min}=0.55\)、\(r_{6,\min}=0.45\)、\(\gamma=2\)。正式训练通过 `--reference-front` 加载由设计域标定的 ideal/nadir 和约束参数。参考 Pareto 也只保留满足两个硬约束的样本，使基准和训练语义一致。代码位置：[`losses/scalarization.py`](../src/gradcell/losses/scalarization.py)、[`scripts/build_reference_front.py`](../scripts/build_reference_front.py) 和 [`scripts/train_mvp.py`](../scripts/train_mvp.py)。
+默认 \(\tau=0.05\)、\(\rho=0.05\)、\(r_{5,\min}=0.50\)、\(r_{6,\min}=0.44\)、\(\gamma=5\)。线性 hinge 在边界附近仍提供非零恢复梯度。正式训练通过 `--reference-front` 加载由设计域标定的 ideal/nadir 和约束参数。参考 Pareto 也只保留满足两个硬约束的样本，使基准和训练语义一致。代码位置：[`losses/scalarization.py`](../src/gradcell/losses/scalarization.py)、[`scripts/build_reference_front.py`](../scripts/build_reference_front.py) 和 [`scripts/train_mvp.py`](../scripts/train_mvp.py)。
 
 ### 第 12 步：反向传播并可选地做 K 步 refinement
 
@@ -604,7 +604,7 @@ loss = loss + 0.5 * monotonic + 1e-3 * step_penalty
 | 主题 | 当前代码事实 | 阅读时应采用的表述 |
 | --- | --- | --- |
 | 第二目标 | `min(E_5C/E_1C, E_6C/E_1C)` | 最差高倍率能量保持率 |
-| 高倍率约束 | `R5 >= 0.55`, `R6 >= 0.45` | Pareto 使用硬筛选，训练使用平方 hinge penalty |
+| 高倍率约束 | `R5 >= 0.50`, `R6 >= 0.44` | Pareto 使用硬筛选，训练使用线性 hinge penalty |
 | 比功率 | 被 `discharge_metrics` 计算 | 诊断量，不进入 GradCell 主 loss |
 | soft minimum | 被计算并返回 | 尚未形成欠压 penalty |
 | 扩散率乘子 | 两个值恒为 1 | 是求解器输入，但不是当前 latent 设计变量 |

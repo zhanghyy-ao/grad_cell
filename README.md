@@ -82,7 +82,7 @@ GradCell 主任务的分阶段实验入口已经统一为：
 ```bash
 python scripts/run_gradcell_exploration.py --stage checks
 python scripts/run_gradcell_exploration.py --stage reference-data --reference-samples 5000
-python scripts/run_gradcell_exploration.py --stage reference-front --reference-samples 5000 --retention-5c-min 0.55 --retention-6c-min 0.45 --constraint-weight 2.0
+python scripts/run_gradcell_exploration.py --stage reference-front --reference-samples 5000 --retention-5c-min 0.50 --retention-6c-min 0.44 --constraint-weight 5.0
 python scripts/run_gradcell_exploration.py --stage train-k0 --reference-samples 5000
 python scripts/run_gradcell_exploration.py --stage evaluate-k0 --reference-samples 5000
 python scripts/run_gradcell_exploration.py --stage train-refiner --reference-samples 5000
@@ -481,10 +481,10 @@ dR = (Rideal - min(R5, R6)) / (Rideal - Rnadir)
 
 ```text
 L_tch = τ logsumexp(wj dj / τ) + ρ Σ wj dj
-L = L_tch + γ[ReLU(r5_min - R5)^2 + ReLU(r6_min - R6)^2]
+L = L_tch + γ[ReLU(r5_min - R5) + ReLU(r6_min - R6)]
 ```
 
-默认 `r5_min=0.55`、`r6_min=0.45`、`γ=2.0`。独立的硬截止 reference 数据自动计算
+默认 `r5_min=0.50`、`r6_min=0.44`、`γ=5.0`。独立的硬截止 reference 数据自动计算
 ideal/nadir；Pareto 前沿只从满足两个硬约束的样本中构建。
 
 ### `src/gradcell/benchmark/regret.py`
