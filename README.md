@@ -1,6 +1,6 @@
 # GradCell：基于可微电池仿真的目标条件化电芯设计
 
-GradCell 是一个面向电芯逆向设计的研究原型。当前主实验接收 1C 比能量与 3C 容量保持率之间的连续性能偏好，先预测一个满足制造约束的电芯设计，再读取 PyBaMM 提供的一阶物理敏感度，用少量梯度更新进一步改善设计。3C 容量保持率定义为 `Q_3C / Q_1C`；原“1C 比能量—3C 平均比功率”在 5000 条参考数据上只产生一个 Pareto 点，已不再用作条件化训练目标。
+GradCell 是一个面向电芯逆向设计的研究原型。当前主实验接收 1C 比能量与 5C/6C 高倍率能量保持率之间的连续性能偏好，先预测满足制造约束的电芯设计，再利用 PyBaMM 一阶物理敏感度改善设计。第二目标定义为 `min(E_5C/E_1C, E_6C/E_1C)`；参考 Pareto 前沿只使用同时满足 5C 和 6C 最低能量保持率约束的样本。旧的 3C 容量保持率因大部分样本落在平台区，已不再作为条件化训练目标。
 
 当前同时提供一条独立的电解液纯物理端到端路线：固定 Chen2020 电极与结构，网络由 CALiSol-23 配方特征直接预测有界 `log_conductivity_scale`，将其接入 PyBaMM DFN，并且只用 DFN 电压轨迹 loss 训练。Property Loss 已删除；实测电导率仅离线生成合成 DFN 目标并用于训练后诊断。DFN sensitivity 和自定义 `Jᵀv` 将电压梯度传回网络。详细流程见 `docs/第一版_固定材料电解液性质_DFN端到端实验流程.md`。
 
@@ -62,13 +62,13 @@ PYTHONPATH=src python scripts/clean_calisol23.py --overwrite
     ↓
 硬可行设计解码器 T(u)
     ↓
-物理参数、额定容量、1C/3C 电流和电芯质量
+物理参数、额定容量、1C/5C/6C 电流和电芯质量
     ↓
 PyBaMM SPMe + IDAKLU forward sensitivities
     ↓
 电压轨迹和轨迹 Jacobian
     ↓
-可微比能量、3C 容量保持率与物理约束 Loss
+可微 1C 比能量、5C/6C 能量保持率与约束 Loss
     ↓
 自定义 backward 执行 Jᵀv
     ↓
@@ -82,7 +82,7 @@ GradCell 主任务的分阶段实验入口已经统一为：
 ```bash
 python scripts/run_gradcell_exploration.py --stage checks
 python scripts/run_gradcell_exploration.py --stage reference-data --reference-samples 5000
-python scripts/run_gradcell_exploration.py --stage reference-front --reference-samples 5000
+python scripts/run_gradcell_exploration.py --stage reference-front --reference-samples 5000 --retention-5c-min 0.55 --retention-6c-min 0.45 --constraint-weight 2.0
 python scripts/run_gradcell_exploration.py --stage train-k0 --reference-samples 5000
 python scripts/run_gradcell_exploration.py --stage evaluate-k0 --reference-samples 5000
 python scripts/run_gradcell_exploration.py --stage train-refiner --reference-samples 5000
@@ -93,7 +93,7 @@ python scripts/run_gradcell_exploration.py --stage verify-dfn --reference-sample
 每一步的实验目的、判据和服务器命令见
 [`docs/GradCell初探_分阶段实验执行.md`](docs/GradCell初探_分阶段实验执行.md)。
 参考前沿同时保存由低倍率 PyBaMM 标定得到的容量乘子；GradCell 训练使用该乘子定义
-1C/3C 电流，避免解析标称容量与硬截止参考容量不一致而造成目标尺度错位。
+1C/5C/6C 电流，避免解析标称容量与硬截止参考容量不一致而造成目标尺度错位。
 
 ## 1. 当前实现范围
 
@@ -107,7 +107,7 @@ python scripts/run_gradcell_exploration.py --stage verify-dfn --reference-sample
 - 解析 toy physics 后端；
 - PyBaMM SPMe + IDAKLU sensitivity 后端；
 - PyTorch 自定义 `autograd.Function`；
-- 平滑截止电压、比能量、可释放容量和 3C 容量保持率指标；
+- 平滑截止电压、1C 比能量和 5C/6C 能量保持率指标；
 - Smooth Tchebycheff 多目标损失；
 - Learned diagonal physics refiner；
 - 方向导数梯度检查；
@@ -261,7 +261,7 @@ grad_cell/
 Qnom = F × A × Lp × φp × cmax,p × Δθp / 3600
 ```
 
-随后 1C 电流为 `Qnom` A，3C 电流为 `3 × Qnom` A。
+当前训练随后构造 1C、5C、6C 电流：`Qnom`、`5 × Qnom`、`6 × Qnom` A；参考数据还保存 3C 诊断。
 
 ### `src/gradcell/design/mass_model.py`
 
@@ -379,7 +379,9 @@ a(t) = sigmoid((V(t) - Vcut) / τV)
 usable energy = ∫ I V(t) a(t) dt
 specific energy = usable energy / stack mass
 delivered capacity = I × ∫ a(t) dt
-3C capacity retention = delivered capacity at 3C / delivered capacity at 1C
+R5 = delivered energy at 5C / delivered energy at 1C
+R6 = delivered energy at 6C / delivered energy at 1C
+high-rate objective = min(R5, R6)
 ```
 
 最终评测仍需要运行真实硬 cutoff 仿真，以检查 smooth metric 是否产生系统性偏差。
@@ -440,18 +442,18 @@ u(k+1) = u(k) - alpha(k) × diagonal(k) × stopgrad(g(k))
 
 这是完整模型的编排层。
 
-`GradCellStep` 保存一次物理评估的 latent、设计、loss、比能量、容量保持率和 solver status。
+`GradCellStep` 保存一次物理评估的 latent、设计、loss、1C 比能量、5C/6C 能量保持率和 solver status。
 
 `GradCellOutput` 保存 K+1 次评估结果，`final` 属性返回最后一步。
 
-`GradCell.__init__` 组合 decoder、task encoder、initializer、refiner、1C/3C physics layer 和 Smooth Tchebycheff objective。
+`GradCell.__init__` 组合 decoder、task encoder、initializer、refiner、1C/5C/6C physics layer 和带高倍率约束的 Smooth Tchebycheff objective。
 
 `GradCell.evaluate(...)`：
 
 1. 解码硬可行设计；
-2. 根据额定容量生成 1C 和 3C 电流；
+2. 根据额定容量生成 1C、5C 和 6C 电流；
 3. 分别调用两个物理层；
-4. 计算 1C 比能量和 3C 容量保持率；
+4. 计算 1C 比能量、5C/6C 能量保持率和约束 violation；
 5. 计算偏好损失；
 6. 对部分 solver failure 加入 recovery penalty；若整个 batch 失败则立即停止训练。
 
@@ -468,20 +470,22 @@ preference → embedding → initializer → u0 → evaluate
 
 ### `src/gradcell/losses/scalarization.py`
 
-`SmoothTchebycheff` 首先将比能量和 3C 容量保持率转成相对于 ideal/nadir 的无量纲距离：
+`SmoothTchebycheff` 首先将 1C 比能量和最差 5C/6C 能量保持率转成相对于 ideal/nadir 的无量纲距离：
 
 ```text
 dE = (Eideal - E) / (Eideal - Enadir)
-dR = (Rideal - R3C) / (Rideal - Rnadir)
+dR = (Rideal - min(R5, R6)) / (Rideal - Rnadir)
 ```
 
 偏好权重为 `[λ, 1-λ]`，最终 loss 为：
 
 ```text
-L = τ logsumexp(wj dj / τ) + ρ Σ wj dj
+L_tch = τ logsumexp(wj dj / τ) + ρ Σ wj dj
+L = L_tch + γ[ReLU(r5_min - R5)^2 + ReLU(r6_min - R6)^2]
 ```
 
-当前实验由独立的硬截止 reference 数据自动计算 ideal/nadir，并保存到 reference front。
+默认 `r5_min=0.55`、`r6_min=0.45`、`γ=2.0`。独立的硬截止 reference 数据自动计算
+ideal/nadir；Pareto 前沿只从满足两个硬约束的样本中构建。
 
 ### `src/gradcell/benchmark/regret.py`
 
@@ -504,7 +508,7 @@ R = (Lachieved - Loptimal) / (Lnominal - Loptimal + ε)
 `sample_preferences(...)` 使用混合采样：
 
 - 50% `Uniform(0,1)`；
-- 25% `Beta(0.5,2.0)`，加强 3C 容量保持率端；
+- 25% `Beta(0.5,2.0)`，加强 5C/6C 高倍率保持率端；
 - 25% `Beta(2.0,0.5)`，加强能量端。
 
 这可以减少模型只学习 Pareto front 中间区域的风险。
@@ -671,7 +675,7 @@ python scripts\validate_gradients.py --backend pybamm --eps 1e-5
 
 | 变量 | 形状 | 含义 |
 |---|---|---|
-| `preference` | `[B]` 或 `[B,1]` | 比能量–3C 容量保持率偏好 |
+| `preference` | `[B]` 或 `[B,1]` | 1C 比能量–5C/6C 高倍率能量保持率偏好 |
 | `task_embedding` | `[B,128]` | 任务表示 |
 | `latent` | `[B,5]` | 无约束结构设计 |
 | `physics_inputs` | `[B,8]` | PyBaMM 输入和电流 |

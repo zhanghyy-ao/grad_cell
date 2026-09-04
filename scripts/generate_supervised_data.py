@@ -27,12 +27,20 @@ PHYSICAL_TARGET_FIELDS = (
     "reference_capacity_ah",
     "delivered_capacity_1c_ah",
     "delivered_capacity_3c_ah",
+    "delivered_capacity_5c_ah",
+    "delivered_capacity_6c_ah",
+    "delivered_energy_1c_wh",
+    "delivered_energy_3c_wh",
+    "delivered_energy_5c_wh",
+    "delivered_energy_6c_wh",
     "specific_energy_1c_wh_kg",
     "specific_power_3c_w_kg",
     "average_voltage_1c_v",
     "average_voltage_3c_v",
     "discharge_time_1c_s",
     "discharge_time_3c_s",
+    "discharge_time_5c_s",
+    "discharge_time_6c_s",
 )
 
 
@@ -136,7 +144,7 @@ def main() -> None:
         torch.manual_seed(args.seed)
         decoder = DesignSpace(capacity_formula=args.capacity_formula)
         run.log(
-            f"building {args.backend}/{args.model} 1C/3C backends; "
+            f"building {args.backend}/{args.model} 1C/3C/5C/6C backends; "
             f"capacity_formula={args.capacity_formula}"
         )
         target_fields = TOY_TARGET_FIELDS
@@ -173,6 +181,22 @@ def main() -> None:
                 current_ramp_time_s=args.current_ramp_time_s,
                 physical_voltage_cutoffs=True,
             )
+            backend_5c = PyBaMMBackend(
+                model_name=args.model,
+                horizon_s=args.maximum_duration_factor * 720.0,
+                time_points=args.time_points,
+                calculate_sensitivities=False,
+                current_ramp_time_s=args.current_ramp_time_s,
+                physical_voltage_cutoffs=True,
+            )
+            backend_6c = PyBaMMBackend(
+                model_name=args.model,
+                horizon_s=args.maximum_duration_factor * 600.0,
+                time_points=args.time_points,
+                calculate_sensitivities=False,
+                current_ramp_time_s=args.current_ramp_time_s,
+                physical_voltage_cutoffs=True,
+            )
         else:
             backend_1c = make_backend(
                 args.backend, args.model, 3600.0, args.time_points, args.current_ramp_time_s
@@ -180,6 +204,8 @@ def main() -> None:
             backend_3c = make_backend(
                 args.backend, args.model, 1200.0, args.time_points, args.current_ramp_time_s
             )
+            backend_5c = make_backend(args.backend, args.model, 720.0, args.time_points, args.current_ramp_time_s)
+            backend_6c = make_backend(args.backend, args.model, 600.0, args.time_points, args.current_ramp_time_s)
         latent = args.latent_std * torch.randn(args.samples, decoder.latent_dim)
         saved_latent, saved_design, saved_targets = [], [], []
         failed_indices: list[int] = []
@@ -216,18 +242,28 @@ def main() -> None:
                 )
                 inputs_1c = base_inputs.copy()
                 inputs_3c = base_inputs.copy()
+                inputs_5c = base_inputs.copy()
+                inputs_6c = base_inputs.copy()
                 inputs_1c[:, -1] = reference_capacity
                 inputs_3c[:, -1] = 3.0 * reference_capacity
+                inputs_5c[:, -1] = 5.0 * reference_capacity
+                inputs_6c[:, -1] = 6.0 * reference_capacity
                 result_1c = backend_1c.solve_discharge_batch(inputs_1c)
                 diagnostics_1c = list(backend_1c.last_solve_diagnostics)
                 result_3c = backend_3c.solve_discharge_batch(inputs_3c)
                 diagnostics_3c = list(backend_3c.last_solve_diagnostics)
+                result_5c = backend_5c.solve_discharge_batch(inputs_5c)
+                diagnostics_5c = list(backend_5c.last_solve_diagnostics)
+                result_6c = backend_6c.solve_discharge_batch(inputs_6c)
+                diagnostics_6c = list(backend_6c.last_solve_diagnostics)
                 cutoff_1c = np.asarray(
                     [row["reached_voltage_cutoff"] for row in diagnostics_1c], dtype=bool
                 )
                 cutoff_3c = np.asarray(
                     [row["reached_voltage_cutoff"] for row in diagnostics_3c], dtype=bool
                 )
+                cutoff_5c = np.asarray([row["reached_voltage_cutoff"] for row in diagnostics_5c], dtype=bool)
+                cutoff_6c = np.asarray([row["reached_voltage_cutoff"] for row in diagnostics_6c], dtype=bool)
                 ok = (
                     (calibration_result.status == 1)
                     & calibration_cutoff
@@ -235,6 +271,10 @@ def main() -> None:
                     & cutoff_1c
                     & (result_3c.status == 1)
                     & cutoff_3c
+                    & (result_5c.status == 1)
+                    & cutoff_5c
+                    & (result_6c.status == 1)
+                    & cutoff_6c
                 )
             else:
                 result_1c = backend_1c.solve_batch(
@@ -243,9 +283,13 @@ def main() -> None:
                 result_3c = backend_3c.solve_batch(
                     design.physics_tensor(3.0).detach().numpy()
                 )
-                ok = (result_1c.status == 1) & (result_3c.status == 1)
+                result_5c = backend_5c.solve_batch(design.physics_tensor(5.0).detach().numpy())
+                result_6c = backend_6c.solve_batch(design.physics_tensor(6.0).detach().numpy())
+                ok = (result_1c.status == 1) & (result_3c.status == 1) & (result_5c.status == 1) & (result_6c.status == 1)
                 ok &= np.isfinite(result_1c.trajectories).all(axis=(1, 2))
                 ok &= np.isfinite(result_3c.trajectories).all(axis=(1, 2))
+                ok &= np.isfinite(result_5c.trajectories).all(axis=(1, 2))
+                ok &= np.isfinite(result_6c.trajectories).all(axis=(1, 2))
 
             if bool(ok.any()):
                 mask = torch.from_numpy(ok)
@@ -271,12 +315,20 @@ def main() -> None:
                                 reference_capacity,
                                 result_1c.delivered_capacity_ah,
                                 result_3c.delivered_capacity_ah,
+                                result_5c.delivered_capacity_ah,
+                                result_6c.delivered_capacity_ah,
+                                result_1c.delivered_energy_wh,
+                                result_3c.delivered_energy_wh,
+                                result_5c.delivered_energy_wh,
+                                result_6c.delivered_energy_wh,
                                 specific_energy_1c,
                                 specific_power_3c,
                                 result_1c.average_voltage_v,
                                 result_3c.average_voltage_v,
                                 result_1c.discharge_time_s,
                                 result_3c.discharge_time_s,
+                                result_5c.discharge_time_s,
+                                result_6c.discharge_time_s,
                             ],
                             axis=-1,
                         )[ok]
@@ -323,6 +375,8 @@ def main() -> None:
                             ),
                             "discharge_1c": diagnostics_1c[local_index],
                             "discharge_3c": diagnostics_3c[local_index],
+                            "discharge_5c": diagnostics_5c[local_index],
+                            "discharge_6c": diagnostics_6c[local_index],
                         }
                     )
             valid_count = sum(values.shape[0] for values in saved_latent)
@@ -377,6 +431,7 @@ def main() -> None:
             "capacity_calibration_iterations": (
                 args.capacity_calibration_iterations if args.backend == "pybamm" else None
             ),
+            "evaluation_c_rates": [1.0, 3.0, 5.0, 6.0],
             "elapsed_s": time.perf_counter() - started,
         }
         save_dataset(args.output, saved_latent, saved_design, saved_targets, metadata)

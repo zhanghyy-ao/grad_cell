@@ -83,7 +83,7 @@ def train(
         success_rate = float(output.final.status.double().mean().detach())
         if success_rate == 0.0:
             raise RuntimeError(
-                "All 1C/3C physics simulations failed; training was stopped to avoid "
+                "All 1C/5C/6C physics simulations failed; training was stopped to avoid "
                 "the zero-gradient failure penalty. Inspect backend diagnostics."
             )
         intermediate = torch.stack([step.loss for step in output.steps], dim=0)

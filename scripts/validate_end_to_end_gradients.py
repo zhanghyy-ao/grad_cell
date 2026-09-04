@@ -50,14 +50,17 @@ def tensor_diagnostics(value: torch.Tensor) -> dict:
 def first_nonfinite_stage(diagnostics: dict) -> str | None:
     stages = (
         ("voltage_1c", diagnostics["voltage_1c"]["all_finite"]),
-        ("voltage_3c", diagnostics["voltage_3c"]["all_finite"]),
+        ("voltage_5c", diagnostics["voltage_5c"]["all_finite"]),
+        ("voltage_6c", diagnostics["voltage_6c"]["all_finite"]),
         ("energy_1c", diagnostics["metrics"]["energy_1c_wh_kg"] is not None),
         (
-            "capacity_retention_3c",
-            diagnostics["metrics"]["capacity_retention_3c"] is not None,
+            "energy_retention_5c",
+            diagnostics["metrics"]["energy_retention_5c"] is not None,
         ),
+        ("energy_retention_6c", diagnostics["metrics"]["energy_retention_6c"] is not None),
         ("minimum_voltage_1c", diagnostics["metrics"]["minimum_voltage_1c_v"] is not None),
-        ("minimum_voltage_3c", diagnostics["metrics"]["minimum_voltage_3c_v"] is not None),
+        ("minimum_voltage_5c", diagnostics["metrics"]["minimum_voltage_5c_v"] is not None),
+        ("minimum_voltage_6c", diagnostics["metrics"]["minimum_voltage_6c_v"] is not None),
         ("loss", diagnostics["loss"] is not None),
     )
     return next((name for name, is_finite in stages if not is_finite), None)
@@ -111,27 +114,34 @@ def main() -> None:
             f"capacity_formula={args.capacity_formula}"
         )
         layer_1c = make_layer(args.backend, 3600.0, args.model, args.current_ramp_time_s)
-        layer_3c = make_layer(args.backend, 1200.0, args.model, args.current_ramp_time_s)
+        layer_5c = make_layer(args.backend, 720.0, args.model, args.current_ramp_time_s)
+        layer_6c = make_layer(args.backend, 600.0, args.model, args.current_ramp_time_s)
         objective = SmoothTchebycheff()
 
         def evaluate(latent: torch.Tensor) -> tuple[torch.Tensor, dict]:
             design = decoder(latent)
             physics_inputs_1c = design.physics_tensor(1.0)
-            physics_inputs_3c = design.physics_tensor(3.0)
+            physics_inputs_5c = design.physics_tensor(5.0)
+            physics_inputs_6c = design.physics_tensor(6.0)
             voltage_1c, status_1c, runtime_1c = layer_1c(physics_inputs_1c)
-            voltage_3c, status_3c, runtime_3c = layer_3c(physics_inputs_3c)
+            voltage_5c, status_5c, runtime_5c = layer_5c(physics_inputs_5c)
+            voltage_6c, status_6c, runtime_6c = layer_6c(physics_inputs_6c)
             metrics_1c = discharge_metrics(
                 voltage_1c, design.nominal_capacity_ah, design.stack_mass_kg, 3600.0
             )
-            metrics_3c = discharge_metrics(
-                voltage_3c, 3.0 * design.nominal_capacity_ah, design.stack_mass_kg, 1200.0
+            metrics_5c = discharge_metrics(
+                voltage_5c, 5.0 * design.nominal_capacity_ah, design.stack_mass_kg, 720.0
+            )
+            metrics_6c = discharge_metrics(
+                voltage_6c, 6.0 * design.nominal_capacity_ah, design.stack_mass_kg, 600.0
             )
             preference = torch.full(
                 (latent.shape[0],), args.preference, dtype=latent.dtype, device=latent.device
             )
             loss = objective(
                 metrics_1c.specific_energy_wh_kg,
-                metrics_3c.delivered_capacity_ah / metrics_1c.delivered_capacity_ah.clamp_min(1e-8),
+                metrics_5c.specific_energy_wh_kg / metrics_1c.specific_energy_wh_kg.clamp_min(1e-8),
+                metrics_6c.specific_energy_wh_kg / metrics_1c.specific_energy_wh_kg.clamp_min(1e-8),
                 preference,
             ).mean()
             diagnostics = {
@@ -141,25 +151,35 @@ def main() -> None:
                     for field in DESIGN_FIELDS
                 },
                 "physics_inputs_1c": physics_inputs_1c.detach().reshape(-1).tolist(),
-                "physics_inputs_3c": physics_inputs_3c.detach().reshape(-1).tolist(),
+                "physics_inputs_5c": physics_inputs_5c.detach().reshape(-1).tolist(),
+                "physics_inputs_6c": physics_inputs_6c.detach().reshape(-1).tolist(),
                 "solver": {
                     "status_1c": int(status_1c.reshape(-1)[0]),
-                    "status_3c": int(status_3c.reshape(-1)[0]),
+                    "status_5c": int(status_5c.reshape(-1)[0]),
+                    "status_6c": int(status_6c.reshape(-1)[0]),
                     "runtime_1c_s": safe_float(runtime_1c.reshape(-1)[0]),
-                    "runtime_3c_s": safe_float(runtime_3c.reshape(-1)[0]),
+                    "runtime_5c_s": safe_float(runtime_5c.reshape(-1)[0]),
+                    "runtime_6c_s": safe_float(runtime_6c.reshape(-1)[0]),
                     "details_1c": layer_1c.backend.last_solve_diagnostics[0],
-                    "details_3c": layer_3c.backend.last_solve_diagnostics[0],
+                    "details_5c": layer_5c.backend.last_solve_diagnostics[0],
+                    "details_6c": layer_6c.backend.last_solve_diagnostics[0],
                 },
                 "voltage_1c": tensor_diagnostics(voltage_1c),
-                "voltage_3c": tensor_diagnostics(voltage_3c),
+                "voltage_5c": tensor_diagnostics(voltage_5c),
+                "voltage_6c": tensor_diagnostics(voltage_6c),
                 "metrics": {
                     "energy_1c_wh_kg": safe_float(metrics_1c.specific_energy_wh_kg[0]),
-                    "capacity_retention_3c": safe_float(
-                        metrics_3c.delivered_capacity_ah[0]
-                        / metrics_1c.delivered_capacity_ah[0].clamp_min(1e-8)
+                    "energy_retention_5c": safe_float(
+                        metrics_5c.specific_energy_wh_kg[0]
+                        / metrics_1c.specific_energy_wh_kg[0].clamp_min(1e-8)
+                    ),
+                    "energy_retention_6c": safe_float(
+                        metrics_6c.specific_energy_wh_kg[0]
+                        / metrics_1c.specific_energy_wh_kg[0].clamp_min(1e-8)
                     ),
                     "minimum_voltage_1c_v": safe_float(metrics_1c.minimum_voltage_v[0]),
-                    "minimum_voltage_3c_v": safe_float(metrics_3c.minimum_voltage_v[0]),
+                    "minimum_voltage_5c_v": safe_float(metrics_5c.minimum_voltage_v[0]),
+                    "minimum_voltage_6c_v": safe_float(metrics_6c.minimum_voltage_v[0]),
                 },
                 "loss": safe_float(loss),
             }

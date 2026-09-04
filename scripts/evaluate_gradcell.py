@@ -43,7 +43,8 @@ def main() -> None:
     )
     with np.load(args.reference_front, allow_pickle=False) as arrays:
         front_energy = arrays["energy_wh_kg"].copy()
-        front_retention = arrays["capacity_retention_3c"].copy()
+        front_retention_5c = arrays["energy_retention_5c"].copy()
+        front_retention_6c = arrays["energy_retention_6c"].copy()
         front_latent = arrays["latent"].copy()
         front_metadata = json.loads(str(arrays["metadata"]))
     bounds = front_metadata["bounds"]
@@ -53,14 +54,20 @@ def main() -> None:
         horizon_s=3600.0,
         current_ramp_time_s=0.0,
     )
-    backend_3c = PyBaMMBackend(
+    backend_5c = PyBaMMBackend(
         model_name=training_model,
-        horizon_s=1200.0,
+        horizon_s=720.0,
+        current_ramp_time_s=0.0,
+    )
+    backend_6c = PyBaMMBackend(
+        model_name=training_model,
+        horizon_s=600.0,
         current_ramp_time_s=0.0,
     )
     model = GradCell(
         DifferentiablePhysicsLayer(backend_1c),
-        DifferentiablePhysicsLayer(backend_3c),
+        DifferentiablePhysicsLayer(backend_5c),
+        DifferentiablePhysicsLayer(backend_6c),
         design_space=DesignSpace(
             capacity_formula=capacity_formula,
             capacity_multiplier=capacity_multiplier,
@@ -93,24 +100,29 @@ def main() -> None:
         capacity_multiplier,
     )
     candidate_loss = scalarized_loss(
-        candidate["energy_wh_kg"], candidate["capacity_retention_3c"], preferences, bounds
+        candidate["energy_wh_kg"], candidate["energy_retention_5c"], candidate["energy_retention_6c"], preferences, bounds
     )
     nominal_loss = scalarized_loss(
         np.repeat(nominal["energy_wh_kg"], len(preferences)),
-        np.repeat(nominal["capacity_retention_3c"], len(preferences)),
+        np.repeat(nominal["energy_retention_5c"], len(preferences)),
+        np.repeat(nominal["energy_retention_6c"], len(preferences)),
         preferences,
         bounds,
     )
     oracle_indices, oracle_losses = [], []
     for preference in preferences:
         repeated = np.full(len(front_energy), preference)
-        losses = scalarized_loss(front_energy, front_retention, repeated, bounds)
+        losses = scalarized_loss(front_energy, front_retention_5c, front_retention_6c, repeated, bounds)
         index = int(np.argmin(losses))
         oracle_indices.append(index)
         oracle_losses.append(float(losses[index]))
     oracle_indices = np.asarray(oracle_indices, dtype=np.int64)
     oracle_losses = np.asarray(oracle_losses)
     valid = candidate["status"] == 1
+    constraint_satisfied = (
+        (candidate["energy_retention_5c"] >= bounds["retention_5c_min"])
+        & (candidate["energy_retention_6c"] >= bounds["retention_6c_min"])
+    )
     report = {
         "checkpoint": str(args.checkpoint),
         "reference_front": str(args.reference_front),
@@ -121,6 +133,9 @@ def main() -> None:
         "refinement_steps": refinement_steps,
         "preference_points": args.preference_points,
         "success_rate": float(valid.mean()),
+        "constraint_satisfaction_rate": float(constraint_satisfied[valid].mean())
+        if valid.any()
+        else None,
         "mean_scalarized_regret": float(np.mean(candidate_loss[valid] - oracle_losses[valid]))
         if valid.any()
         else None,
@@ -141,14 +156,17 @@ def main() -> None:
         latent=latent.numpy(),
         status=candidate["status"],
         energy_wh_kg=candidate["energy_wh_kg"],
-        capacity_retention_3c=candidate["capacity_retention_3c"],
+        energy_retention_5c=candidate["energy_retention_5c"],
+        energy_retention_6c=candidate["energy_retention_6c"],
         scalarized_loss=candidate_loss,
         nominal_energy_wh_kg=np.repeat(nominal["energy_wh_kg"], len(preferences)),
-        nominal_capacity_retention_3c=np.repeat(nominal["capacity_retention_3c"], len(preferences)),
+        nominal_energy_retention_5c=np.repeat(nominal["energy_retention_5c"], len(preferences)),
+        nominal_energy_retention_6c=np.repeat(nominal["energy_retention_6c"], len(preferences)),
         nominal_scalarized_loss=nominal_loss,
         oracle_latent=front_latent[oracle_indices],
         oracle_energy_wh_kg=front_energy[oracle_indices],
-        oracle_capacity_retention_3c=front_retention[oracle_indices],
+        oracle_energy_retention_5c=front_retention_5c[oracle_indices],
+        oracle_energy_retention_6c=front_retention_6c[oracle_indices],
         oracle_scalarized_loss=oracle_losses,
     )
     (args.output_dir / "metrics.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

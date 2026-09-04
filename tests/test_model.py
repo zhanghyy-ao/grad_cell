@@ -30,7 +30,8 @@ class ControlledFailureBackend:
 def test_gradcell_k0_backward():
     model = GradCell(
         DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=3600.0)),
-        DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=1200.0)),
+        DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=720.0)),
+        DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=600.0)),
     ).double()
     output = model(torch.tensor([0.2, 0.8], dtype=torch.float64), num_steps=0)
     loss = output.final.loss.mean()
@@ -47,7 +48,8 @@ def test_gradcell_k0_backward():
 def test_gradcell_refinement_runs():
     model = GradCell(
         DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=3600.0)),
-        DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=1200.0)),
+        DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=720.0)),
+        DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=600.0)),
     ).double()
     output = model(torch.tensor([0.5], dtype=torch.float64), num_steps=1)
     assert len(output.steps) == 2
@@ -56,6 +58,7 @@ def test_gradcell_refinement_runs():
 
 def test_failed_sample_does_not_contaminate_valid_sample():
     model = GradCell(
+        DifferentiablePhysicsLayer(ControlledFailureBackend()),
         DifferentiablePhysicsLayer(ControlledFailureBackend()),
         DifferentiablePhysicsLayer(ControlledFailureBackend()),
     ).double()
@@ -67,9 +70,11 @@ def test_failed_sample_does_not_contaminate_valid_sample():
     assert step.status.tolist() == [1, 0]
     assert torch.isfinite(step.loss).all()
     assert torch.isfinite(step.energy).all()
-    assert torch.isfinite(step.retention).all()
+    assert torch.isfinite(step.retention_5c).all()
+    assert torch.isfinite(step.retention_6c).all()
     assert step.energy[1] == 0.0
-    assert step.retention[1] == 0.0
+    assert step.retention_5c[1] == 0.0
+    assert step.retention_6c[1] == 0.0
 
     step.loss.sum().backward()
     assert latent.grad is not None
@@ -78,6 +83,7 @@ def test_failed_sample_does_not_contaminate_valid_sample():
 
 def test_all_failed_batch_has_finite_loss_and_gradient():
     model = GradCell(
+        DifferentiablePhysicsLayer(ControlledFailureBackend(fail_all=True)),
         DifferentiablePhysicsLayer(ControlledFailureBackend(fail_all=True)),
         DifferentiablePhysicsLayer(ControlledFailureBackend(fail_all=True)),
     ).double()

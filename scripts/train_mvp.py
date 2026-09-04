@@ -55,26 +55,33 @@ def main() -> None:
             run.log(f"objective bounds loaded from {args.reference_front}: {objective_bounds}")
             run.log(f"capacity multiplier loaded from reference data: {capacity_multiplier}")
         run.log(
-            f"building {args.backend}/{args.model} 1C/3C backends; "
+            f"building {args.backend}/{args.model} 1C/5C/6C backends; "
             f"capacity_formula={args.capacity_formula}"
         )
         if args.backend == "toy":
             backend1 = AnalyticToyBackend(horizon_s=3600.0)
-            backend3 = AnalyticToyBackend(horizon_s=1200.0)
+            backend5 = AnalyticToyBackend(horizon_s=720.0)
+            backend6 = AnalyticToyBackend(horizon_s=600.0)
         else:
             backend1 = PyBaMMBackend(
                 model_name=args.model,
                 horizon_s=3600.0,
                 current_ramp_time_s=args.current_ramp_time_s,
             )
-            backend3 = PyBaMMBackend(
+            backend5 = PyBaMMBackend(
                 model_name=args.model,
-                horizon_s=1200.0,
+                horizon_s=720.0,
+                current_ramp_time_s=args.current_ramp_time_s,
+            )
+            backend6 = PyBaMMBackend(
+                model_name=args.model,
+                horizon_s=600.0,
                 current_ramp_time_s=args.current_ramp_time_s,
             )
         model = GradCell(
             DifferentiablePhysicsLayer(backend1),
-            DifferentiablePhysicsLayer(backend3),
+            DifferentiablePhysicsLayer(backend5),
+            DifferentiablePhysicsLayer(backend6),
             design_space=DesignSpace(
                 capacity_formula=args.capacity_formula,
                 capacity_multiplier=capacity_multiplier,
@@ -89,7 +96,8 @@ def main() -> None:
             "status": preflight.status.tolist(),
             "loss": preflight.loss.detach().tolist(),
             "energy_wh_kg": preflight.energy.detach().tolist(),
-            "capacity_retention_3c": preflight.retention.detach().tolist(),
+            "energy_retention_5c": preflight.retention_5c.detach().tolist(),
+            "energy_retention_6c": preflight.retention_6c.detach().tolist(),
         }
         run.event("physics_preflight", **preflight_summary)
         if not bool(preflight.status.bool().all()):
@@ -128,6 +136,7 @@ def main() -> None:
                     if args.reference_front is not None
                     else None,
                     "objective_bounds": objective_bounds,
+                    "high_rate_objective": "min(energy_retention_5c, energy_retention_6c)",
                     "refinement_steps": args.refinement_steps,
                     "seed": args.seed,
                 },

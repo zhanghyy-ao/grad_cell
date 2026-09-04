@@ -10,7 +10,8 @@ from tests.test_model import ControlledFailureBackend
 def build_model() -> GradCell:
     return GradCell(
         DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=3600.0)),
-        DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=1200.0)),
+        DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=720.0)),
+        DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=600.0)),
     ).double()
 
 
@@ -52,6 +53,7 @@ def test_training_stops_when_all_physics_samples_fail():
     model = GradCell(
         DifferentiablePhysicsLayer(ControlledFailureBackend(fail_all=True)),
         DifferentiablePhysicsLayer(ControlledFailureBackend(fail_all=True)),
+        DifferentiablePhysicsLayer(ControlledFailureBackend(fail_all=True)),
     ).double()
-    with pytest.raises(RuntimeError, match="All 1C/3C physics simulations failed"):
+    with pytest.raises(RuntimeError, match="All 1C/5C/6C physics simulations failed"):
         train(model, steps=1, batch_size=2, validation_interval=0)

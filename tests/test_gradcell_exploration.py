@@ -32,18 +32,21 @@ def test_scalarized_loss_respects_preference_endpoints() -> None:
     bounds = {
         "energy_ideal": 10.0,
         "energy_nadir": 0.0,
-        "retention_ideal": 10.0,
-        "retention_nadir": 0.0,
+        "high_rate_ideal": 10.0,
+        "high_rate_nadir": 0.0,
+        "retention_5c_min": 0.0,
+        "retention_6c_min": 0.0,
+        "constraint_weight": 2.0,
     }
     energy = np.asarray([10.0, 0.0])
     power = np.asarray([0.0, 10.0])
     assert (
-        scalarized_loss(energy, power, np.ones(2), bounds)[0]
-        < scalarized_loss(energy, power, np.ones(2), bounds)[1]
+        scalarized_loss(energy, power, power, np.ones(2), bounds)[0]
+        < scalarized_loss(energy, power, power, np.ones(2), bounds)[1]
     )
     assert (
-        scalarized_loss(energy, power, np.zeros(2), bounds)[1]
-        < scalarized_loss(energy, power, np.zeros(2), bounds)[0]
+        scalarized_loss(energy, power, power, np.zeros(2), bounds)[1]
+        < scalarized_loss(energy, power, power, np.zeros(2), bounds)[0]
     )
 
 
@@ -53,3 +56,20 @@ def test_evenly_spaced_indices_include_endpoints() -> None:
     assert len(indices) == 4
     assert indices[0] == 0
     assert indices[-1] == 10
+
+
+def test_scalarized_loss_penalizes_high_rate_constraint_violation() -> None:
+    bounds = {
+        "energy_ideal": 10.0,
+        "energy_nadir": 0.0,
+        "high_rate_ideal": 1.0,
+        "high_rate_nadir": 0.0,
+        "retention_5c_min": 0.6,
+        "retention_6c_min": 0.5,
+        "constraint_weight": 10.0,
+    }
+    energy = np.asarray([8.0, 8.0])
+    retention_5c = np.asarray([0.7, 0.4])
+    retention_6c = np.asarray([0.6, 0.3])
+    loss = scalarized_loss(energy, retention_5c, retention_6c, np.full(2, 0.5), bounds)
+    assert loss[0] < loss[1]

@@ -20,7 +20,8 @@ class GradCellStep:
     design: CellDesign
     loss: torch.Tensor
     energy: torch.Tensor
-    retention: torch.Tensor
+    retention_5c: torch.Tensor
+    retention_6c: torch.Tensor
     status: torch.Tensor
 
 
@@ -37,7 +38,8 @@ class GradCell(nn.Module):
     def __init__(
         self,
         physics_1c: nn.Module,
-        physics_3c: nn.Module,
+        physics_5c: nn.Module,
+        physics_6c: nn.Module,
         design_space: DesignSpace | None = None,
         objective: nn.Module | None = None,
         task_dim: int = 128,
@@ -52,21 +54,25 @@ class GradCell(nn.Module):
             task_dim=task_dim, latent_dim=self.design_space.latent_dim
         )
         self.physics_1c = physics_1c
-        self.physics_3c = physics_3c
+        self.physics_5c = physics_5c
+        self.physics_6c = physics_6c
         self.objective = objective or SmoothTchebycheff()
 
     def evaluate(self, latent: torch.Tensor, preference: torch.Tensor) -> GradCellStep:
         design = self.design_space(latent)
         y1, status1, _ = self.physics_1c(design.physics_tensor(1.0))
-        y3, status3, _ = self.physics_3c(design.physics_tensor(3.0))
+        y5, status5, _ = self.physics_5c(design.physics_tensor(5.0))
+        y6, status6, _ = self.physics_6c(design.physics_tensor(6.0))
         finite1 = torch.isfinite(y1).flatten(start_dim=1).all(dim=1)
-        finite3 = torch.isfinite(y3).flatten(start_dim=1).all(dim=1)
-        valid = status1.bool() & status3.bool() & finite1 & finite3
+        finite5 = torch.isfinite(y5).flatten(start_dim=1).all(dim=1)
+        finite6 = torch.isfinite(y6).flatten(start_dim=1).all(dim=1)
+        valid = status1.bool() & status5.bool() & status6.bool() & finite1 & finite5 & finite6
         valid_indices = valid.nonzero(as_tuple=True)[0]
 
         batch_size = latent.shape[0]
         energy = latent.new_zeros(batch_size)
-        retention = latent.new_zeros(batch_size)
+        retention_5c = latent.new_zeros(batch_size)
+        retention_6c = latent.new_zeros(batch_size)
         loss = 100.0 + 0.1 * latent.square().mean(dim=-1)
 
         if valid_indices.numel() > 0:
@@ -76,19 +82,25 @@ class GradCell(nn.Module):
                 design.stack_mass_kg[valid],
                 3600.0,
             )
-            metrics3 = discharge_metrics(
-                y3[valid],
-                3.0 * design.nominal_capacity_ah[valid],
+            metrics5 = discharge_metrics(
+                y5[valid], 5.0 * design.nominal_capacity_ah[valid],
                 design.stack_mass_kg[valid],
-                1200.0,
+                720.0,
+            )
+            metrics6 = discharge_metrics(
+                y6[valid], 6.0 * design.nominal_capacity_ah[valid],
+                design.stack_mass_kg[valid], 600.0,
             )
             valid_energy = metrics1.specific_energy_wh_kg
-            valid_retention = (
-                metrics3.delivered_capacity_ah / metrics1.delivered_capacity_ah.clamp_min(1e-8)
+            energy_1c = metrics1.specific_energy_wh_kg.clamp_min(1e-8)
+            valid_retention_5c = metrics5.specific_energy_wh_kg / energy_1c
+            valid_retention_6c = metrics6.specific_energy_wh_kg / energy_1c
+            valid_loss = self.objective(
+                valid_energy, valid_retention_5c, valid_retention_6c, preference[valid]
             )
-            valid_loss = self.objective(valid_energy, valid_retention, preference[valid])
             energy = energy.index_copy(0, valid_indices, valid_energy)
-            retention = retention.index_copy(0, valid_indices, valid_retention)
+            retention_5c = retention_5c.index_copy(0, valid_indices, valid_retention_5c)
+            retention_6c = retention_6c.index_copy(0, valid_indices, valid_retention_6c)
             loss = loss.index_copy(0, valid_indices, valid_loss)
 
         status = valid.to(torch.int64)
@@ -97,7 +109,8 @@ class GradCell(nn.Module):
             design=design,
             loss=loss,
             energy=energy,
-            retention=retention,
+            retention_5c=retention_5c,
+            retention_6c=retention_6c,
             status=status,
         )
 
@@ -118,7 +131,7 @@ class GradCell(nn.Module):
             physics_features = torch.stack(
                 [
                     step.energy / 250.0,
-                    step.retention,
+                    torch.minimum(step.retention_5c, step.retention_6c),
                     step.loss,
                     step.status.to(step.loss.dtype),
                     latent.square().mean(dim=-1),

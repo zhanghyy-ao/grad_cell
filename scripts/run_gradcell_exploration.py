@@ -34,6 +34,9 @@ def main() -> None:
     parser.add_argument("--refinement-steps", type=int, default=3)
     parser.add_argument("--preference-points", type=int, default=11)
     parser.add_argument("--dfn-candidates", type=int, default=11)
+    parser.add_argument("--retention-5c-min", type=float, default=0.55)
+    parser.add_argument("--retention-6c-min", type=float, default=0.45)
+    parser.add_argument("--constraint-weight", type=float, default=2.0)
     parser.add_argument("--reference-seed", type=int, default=101)
     parser.add_argument("--model-seed", type=int, default=7)
     parser.add_argument("--output-root", type=Path, default=Path("results/gradcell_exploration"))
@@ -51,9 +54,9 @@ def main() -> None:
     data = (
         root
         / "data"
-        / f"gradcell_reference_spme_{args.reference_samples}_s{args.reference_seed}.npz"
+        / f"gradcell_reference_spme_1c5c6c_{args.reference_samples}_s{args.reference_seed}.npz"
     )
-    front = output_root / "reference" / "pareto_front.npz"
+    front = output_root / "reference" / "pareto_front_1c5c6c.npz"
     k0_checkpoint = output_root / f"k0_s{args.model_seed}" / "model.pt"
     refiner_checkpoint = output_root / f"k{args.refinement_steps}_s{args.model_seed}" / "model.pt"
     k0_eval = output_root / f"k0_s{args.model_seed}" / "evaluation_spme"
@@ -84,6 +87,12 @@ def main() -> None:
             str(front),
             "--preference-points",
             str(args.preference_points),
+            "--retention-5c-min",
+            str(args.retention_5c_min),
+            "--retention-6c-min",
+            str(args.retention_6c_min),
+            "--constraint-weight",
+            str(args.constraint_weight),
         ],
         "train-k0": [
             python,

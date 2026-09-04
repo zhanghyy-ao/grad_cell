@@ -41,7 +41,8 @@ def main() -> None:
         latent = arrays["latent"].copy()
         spme_status = arrays["status"].copy()
         spme_energy = arrays["energy_wh_kg"].copy()
-        spme_retention = arrays["capacity_retention_3c"].copy()
+        spme_retention_5c = arrays["energy_retention_5c"].copy()
+        spme_retention_6c = arrays["energy_retention_6c"].copy()
         saved_capacity_multiplier = (
             float(arrays["capacity_multiplier"]) if "capacity_multiplier" in arrays.files else 1.0
         )
@@ -60,7 +61,8 @@ def main() -> None:
     )
     valid = (spme_status[indices] == 1) & (dfn["status"] == 1)
     energy_error = relative_error(dfn["energy_wh_kg"], spme_energy[indices])
-    retention_error = relative_error(dfn["capacity_retention_3c"], spme_retention[indices])
+    retention_5c_error = relative_error(dfn["energy_retention_5c"], spme_retention_5c[indices])
+    retention_6c_error = relative_error(dfn["energy_retention_6c"], spme_retention_6c[indices])
     report = {
         "source_candidates": str(args.candidates),
         "selected_candidates": len(indices),
@@ -69,10 +71,16 @@ def main() -> None:
         "median_relative_energy_error": float(np.median(energy_error[valid]))
         if valid.any()
         else None,
-        "mean_relative_retention_error": float(retention_error[valid].mean())
+        "mean_relative_retention_5c_error": float(retention_5c_error[valid].mean())
         if valid.any()
         else None,
-        "median_relative_retention_error": float(np.median(retention_error[valid]))
+        "median_relative_retention_5c_error": float(np.median(retention_5c_error[valid]))
+        if valid.any()
+        else None,
+        "mean_relative_retention_6c_error": float(retention_6c_error[valid].mean())
+        if valid.any()
+        else None,
+        "median_relative_retention_6c_error": float(np.median(retention_6c_error[valid]))
         if valid.any()
         else None,
     }
@@ -86,10 +94,13 @@ def main() -> None:
         dfn_status=dfn["status"],
         spme_energy_wh_kg=spme_energy[indices],
         dfn_energy_wh_kg=dfn["energy_wh_kg"],
-        spme_capacity_retention_3c=spme_retention[indices],
-        dfn_capacity_retention_3c=dfn["capacity_retention_3c"],
+        spme_energy_retention_5c=spme_retention_5c[indices],
+        dfn_energy_retention_5c=dfn["energy_retention_5c"],
+        spme_energy_retention_6c=spme_retention_6c[indices],
+        dfn_energy_retention_6c=dfn["energy_retention_6c"],
         relative_energy_error=energy_error,
-        relative_retention_error=retention_error,
+        relative_retention_5c_error=retention_5c_error,
+        relative_retention_6c_error=retention_6c_error,
     )
     (args.output_dir / "metrics.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2), flush=True)
