@@ -85,7 +85,7 @@ python scripts/run_gradcell_exploration.py --stage reference-data --reference-sa
 python scripts/run_gradcell_exploration.py --stage reference-front --reference-samples 5000 --retention-5c-min 0.50 --retention-6c-min 0.44 --constraint-weight 5.0
 python scripts/run_gradcell_exploration.py --stage train-k0 --reference-samples 5000
 python scripts/run_gradcell_exploration.py --stage evaluate-k0 --reference-samples 5000
-python scripts/run_gradcell_exploration.py --stage train-refiner --reference-samples 5000
+python scripts/run_gradcell_exploration.py --stage train-refiner --reference-samples 5000 --refiner-frozen-steps 200 --refiner-joint-steps 100
 python scripts/run_gradcell_exploration.py --stage evaluate-refiner --reference-samples 5000
 python scripts/run_gradcell_exploration.py --stage verify-dfn --reference-samples 5000
 ```
@@ -465,6 +465,11 @@ preference → embedding → initializer → u0 → evaluate
 ```
 
 `num_steps=0` 对应 direct initializer；`num_steps=1/3/5` 对应不同物理调用预算下的 GradCell。
+
+K>0 的正式训练从已验证的 K=0 checkpoint 加载 task encoder 与 initializer。第一阶段
+冻结这两个模块，仅训练 refiner；第二阶段解冻后以较小学习率联合微调。聚合目标以最终
+`L(uK)` 为主，中间 Loss 使用较小辅助权重。每一步 latent update 还会按 L2 范数裁剪，
+联合微调若降低验证性能则自动回退到冻结阶段最佳模型。
 
 ## 8. Loss 与 benchmark
 

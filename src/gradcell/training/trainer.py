@@ -34,9 +34,18 @@ def train(
     checkpoint_path: str | Path | None = None,
     resume_from: str | Path | None = None,
     log_path: str | Path | None = None,
+    auxiliary_loss_weight: float = 0.1,
+    monotonic_weight: float = 0.1,
+    step_penalty_weight: float = 1e-3,
+    phase: str = "joint",
 ) -> TrainResult:
     """训练模型，并支持验证、早停、断点恢复和 JSONL 结构化日志。"""
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
+    if not trainable_parameters:
+        raise ValueError("No trainable parameters are enabled")
+    optimizer = torch.optim.AdamW(
+        trainable_parameters, lr=learning_rate, weight_decay=weight_decay
+    )
     losses: list[float] = []
     validation_losses: list[float] = []
     first_parameter = next(model.parameters())
@@ -87,18 +96,26 @@ def train(
                 "the zero-gradient failure penalty. Inspect backend diagnostics."
             )
         intermediate = torch.stack([step.loss for step in output.steps], dim=0)
-        loss = intermediate.mean()
+        final_loss = intermediate[-1].mean()
+        auxiliary_loss = final_loss.new_zeros(())
+        monotonic = final_loss.new_zeros(())
+        step_penalty = final_loss.new_zeros(())
+        loss = final_loss
         if len(output.steps) > 1:
-            monotonic = torch.nn.functional.softplus(
-                intermediate[1:] - intermediate[:-1] + 1e-3
-            ).mean()
+            auxiliary_loss = intermediate[:-1].mean()
+            monotonic = torch.relu(intermediate[1:] - intermediate[:-1]).mean()
             step_penalty = torch.stack(
                 [
                     (output.steps[i + 1].latent - output.steps[i].latent).square().mean()
                     for i in range(len(output.steps) - 1)
                 ]
             ).mean()
-            loss = loss + 0.5 * monotonic + 1e-3 * step_penalty
+            loss = (
+                final_loss
+                + auxiliary_loss_weight * auxiliary_loss
+                + monotonic_weight * monotonic
+                + step_penalty_weight * step_penalty
+            )
         if not torch.isfinite(loss):
             raise FloatingPointError(
                 f"Non-finite training loss detected at step {iteration}: {loss.detach()}"
@@ -114,7 +131,12 @@ def train(
         losses.append(float(loss.detach()))
         record = {
             "step": iteration,
+            "phase": phase,
             "train_loss": losses[-1],
+            "final_loss": float(final_loss.detach()),
+            "auxiliary_loss": float(auxiliary_loss.detach()),
+            "monotonic_penalty": float(monotonic.detach()),
+            "step_penalty": float(step_penalty.detach()),
             "physics_success_rate": success_rate,
         }
         if validation_interval and iteration % validation_interval == 0:
@@ -123,9 +145,30 @@ def train(
             # Keep autograd enabled here; no backward pass is performed on the validation graph.
             with torch.enable_grad():
                 val_output = model(validation_preferences, num_steps=refinement_steps)
-                val_loss = float(
-                    torch.stack([step.loss for step in val_output.steps]).mean().detach()
+                val_intermediate = torch.stack(
+                    [step.loss for step in val_output.steps], dim=0
                 )
+                val_objective = val_intermediate[-1].mean()
+                if len(val_output.steps) > 1:
+                    val_auxiliary = val_intermediate[:-1].mean()
+                    val_monotonic = torch.relu(
+                        val_intermediate[1:] - val_intermediate[:-1]
+                    ).mean()
+                    val_step_penalty = torch.stack(
+                        [
+                            (val_output.steps[i + 1].latent - val_output.steps[i].latent)
+                            .square()
+                            .mean()
+                            for i in range(len(val_output.steps) - 1)
+                        ]
+                    ).mean()
+                    val_objective = (
+                        val_objective
+                        + auxiliary_loss_weight * val_auxiliary
+                        + monotonic_weight * val_monotonic
+                        + step_penalty_weight * val_step_penalty
+                    )
+                val_loss = float(val_objective.detach())
             model.train()
             validation_losses.append(val_loss)
             record["validation_loss"] = val_loss

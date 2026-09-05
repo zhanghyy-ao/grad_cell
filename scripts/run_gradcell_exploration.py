@@ -33,6 +33,11 @@ def main() -> None:
     parser.add_argument("--training-steps", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--refinement-steps", type=int, default=3)
+    parser.add_argument("--refiner-frozen-steps", type=int, default=200)
+    parser.add_argument("--refiner-joint-steps", type=int, default=100)
+    parser.add_argument("--refiner-joint-lr-scale", type=float, default=0.2)
+    parser.add_argument("--refiner-auxiliary-weight", type=float, default=0.1)
+    parser.add_argument("--max-refinement-update-norm", type=float, default=0.25)
     parser.add_argument("--preference-points", type=int, default=11)
     parser.add_argument("--dfn-candidates", type=int, default=11)
     parser.add_argument("--retention-5c-min", type=float, default=0.50)
@@ -46,6 +51,8 @@ def main() -> None:
         parser.error("--reference-samples must be at least 20")
     if args.refinement_steps < 1:
         parser.error("--refinement-steps must be positive")
+    if args.refiner_frozen_steps < 1 or args.refiner_joint_steps < 0:
+        parser.error("refiner frozen steps must be positive and joint steps non-negative")
 
     root = Path(__file__).resolve().parents[1]
     python = sys.executable
@@ -59,10 +66,16 @@ def main() -> None:
     )
     front = output_root / "reference" / "pareto_front_1c5c6c.npz"
     k0_checkpoint = output_root / f"k0_s{args.model_seed}" / "model.pt"
-    refiner_checkpoint = output_root / f"k{args.refinement_steps}_s{args.model_seed}" / "model.pt"
+    refiner_checkpoint = (
+        output_root / f"k{args.refinement_steps}_staged_s{args.model_seed}" / "model.pt"
+    )
     k0_eval = output_root / f"k0_s{args.model_seed}" / "evaluation_spme"
     k0_unseen_eval = output_root / f"k0_s{args.model_seed}" / "evaluation_spme_unseen"
-    refiner_eval = output_root / f"k{args.refinement_steps}_s{args.model_seed}" / "evaluation_spme"
+    refiner_eval = (
+        output_root
+        / f"k{args.refinement_steps}_staged_s{args.model_seed}"
+        / "evaluation_spme"
+    )
 
     commands = {
         "checks": [python, "-m", "pytest", "-q"],
@@ -150,11 +163,23 @@ def main() -> None:
             "--model",
             "SPMe",
             "--steps",
-            str(args.training_steps),
+            str(args.refiner_frozen_steps + args.refiner_joint_steps),
             "--batch-size",
             str(args.batch_size),
             "--refinement-steps",
             str(args.refinement_steps),
+            "--initializer-checkpoint",
+            str(k0_checkpoint),
+            "--frozen-refiner-steps",
+            str(args.refiner_frozen_steps),
+            "--joint-finetune-steps",
+            str(args.refiner_joint_steps),
+            "--joint-learning-rate-scale",
+            str(args.refiner_joint_lr_scale),
+            "--auxiliary-loss-weight",
+            str(args.refiner_auxiliary_weight),
+            "--max-refinement-update-norm",
+            str(args.max_refinement_update_norm),
             "--reference-front",
             str(front),
             "--seed",
@@ -196,6 +221,8 @@ def main() -> None:
     }.get(args.stage)
     if required is not None and not required.is_file():
         parser.error(f"required artifact is missing: {required}")
+    if args.stage == "train-refiner" and not k0_checkpoint.is_file():
+        parser.error(f"required K=0 initializer checkpoint is missing: {k0_checkpoint}")
     run(commands[args.stage], root, env)
 
 

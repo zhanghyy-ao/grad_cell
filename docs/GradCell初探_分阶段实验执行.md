@@ -98,17 +98,30 @@ python scripts/run_gradcell_exploration.py \
 主要观察：`success_rate`、`constraint_satisfaction_rate`、`mean_scalarized_regret` 和
 `candidate_beats_nominal_fraction`。训练期固定时域的软指标不能替代这里的硬截止结果。
 
-## 5. 训练 K=3 Learned Refiner
+## 5. 分阶段训练 K=3 Learned Refiner
 
 ```bash
 python scripts/run_gradcell_exploration.py \
   --stage train-refiner \
   --reference-samples 5000 \
-  --training-steps 1000 \
   --batch-size 4 \
   --refinement-steps 3 \
+  --refiner-frozen-steps 200 \
+  --refiner-joint-steps 100 \
+  --refiner-joint-lr-scale 0.2 \
+  --refiner-auxiliary-weight 0.1 \
+  --max-refinement-update-norm 0.25 \
   --model-seed 7
 ```
+
+该阶段不再从头联合训练。脚本从同一输出目录的 `k0_s7/model.pt` 只加载 task encoder
+和 initializer，保留全新 refiner；前 200 步冻结 initializer stack，只训练 refiner；后
+100 步解冻全部网络，以原学习率的 0.2 倍联合微调。Loss 以最终 `L(u3)` 为主，中间
+`L(u0:u2)` 仅以 0.1 权重辅助，并惩罚实际变差的 refinement。每一步 latent 更新的 L2
+范数硬限制为 0.25。若联合微调的最佳验证 Loss 差于冻结阶段，最终 checkpoint 自动
+回退到冻结阶段最佳状态。
+最终模型写入 `k3_staged_s7/model.pt`，不会覆盖旧的从头联合训练 `k3_s7/model.pt`，便于
+进行公平对照。
 
 ## 6. 用硬截止 SPMe 评估 K=3
 

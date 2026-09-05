@@ -43,6 +43,7 @@ class GradCell(nn.Module):
         design_space: DesignSpace | None = None,
         objective: nn.Module | None = None,
         task_dim: int = 128,
+        max_refinement_update_norm: float = 0.25,
     ) -> None:
         super().__init__()
         self.design_space = design_space or DesignSpace()
@@ -57,6 +58,9 @@ class GradCell(nn.Module):
         self.physics_5c = physics_5c
         self.physics_6c = physics_6c
         self.objective = objective or SmoothTchebycheff()
+        if max_refinement_update_norm <= 0.0:
+            raise ValueError("max_refinement_update_norm must be positive")
+        self.max_refinement_update_norm = max_refinement_update_norm
 
     def evaluate(self, latent: torch.Tensor, preference: torch.Tensor) -> GradCellStep:
         design = self.design_space(latent)
@@ -117,6 +121,10 @@ class GradCell(nn.Module):
     def forward(self, preference: torch.Tensor, num_steps: int = 0) -> GradCellOutput:
         task_embedding = self.task_encoder(preference)
         latent = self.initializer(task_embedding)
+        # During frozen-refiner training the initializer has no trainable parameters,
+        # but the refiner still needs dL/du from the differentiable physics chain.
+        if not latent.requires_grad:
+            latent = latent.detach().requires_grad_(True)
         state = None
         steps: list[GradCellStep] = []
         for index in range(num_steps + 1):
@@ -141,5 +149,10 @@ class GradCell(nn.Module):
             alpha, diagonal, state = self.refiner(
                 task_embedding, latent, physics_features, gradient, state
             )
-            latent = latent - alpha * diagonal * gradient
+            update = alpha * diagonal * gradient
+            update_norm = update.norm(dim=-1, keepdim=True).clamp_min(1e-12)
+            update_scale = torch.clamp(
+                self.max_refinement_update_norm / update_norm, max=1.0
+            )
+            latent = latent - update_scale * update
         return GradCellOutput(steps)

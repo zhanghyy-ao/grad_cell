@@ -56,6 +56,32 @@ def test_gradcell_refinement_runs():
     assert torch.isfinite(output.final.loss).all()
 
 
+def test_refiner_respects_update_norm_and_trains_with_frozen_initializer():
+    model = GradCell(
+        DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=3600.0)),
+        DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=720.0)),
+        DifferentiablePhysicsLayer(AnalyticToyBackend(horizon_s=600.0)),
+        max_refinement_update_norm=0.05,
+    ).double()
+    for parameter in model.task_encoder.parameters():
+        parameter.requires_grad_(False)
+    for parameter in model.initializer.parameters():
+        parameter.requires_grad_(False)
+
+    output = model(torch.tensor([0.2, 0.8], dtype=torch.float64), num_steps=3)
+    for previous, current in zip(output.steps, output.steps[1:]):
+        update_norm = (current.latent - previous.latent).norm(dim=-1)
+        assert torch.all(update_norm <= 0.05 + 1e-10)
+    output.final.loss.mean().backward()
+    refiner_gradient = sum(
+        float(parameter.grad.norm())
+        for parameter in model.refiner.parameters()
+        if parameter.grad is not None
+    )
+    assert refiner_gradient > 0.0
+    assert all(parameter.grad is None for parameter in model.initializer.parameters())
+
+
 def test_failed_sample_does_not_contaminate_valid_sample():
     model = GradCell(
         DifferentiablePhysicsLayer(ControlledFailureBackend()),

@@ -579,21 +579,25 @@ python scripts\validate_end_to_end_gradients.py --backend pybamm
 
 ## 📍 训练阶段与推理阶段
 
-训练每一步对一批偏好执行 \(K+1\) 次设计评价，取所有中间 loss 的均值。若有 refinement，还增加“下一步不要变差”的平滑单调项与步长 penalty：
+K=0 直接优化 initializer 的最终 Loss。K>0 先从 K=0 checkpoint 加载 task encoder 和 initializer，冻结二者仅训练 refiner，再以较小学习率联合微调。聚合目标明确以最终 Loss 为主，中间 Loss 仅作为小权重辅助：
 
 ```python
 intermediate = torch.stack([step.loss for step in output.steps], dim=0)
-loss = intermediate.mean()
+final_loss = intermediate[-1].mean()
+auxiliary_loss = intermediate[:-1].mean()
 
-monotonic = torch.nn.functional.softplus(
-    intermediate[1:] - intermediate[:-1] + 1e-3
-).mean()
+monotonic = torch.relu(intermediate[1:] - intermediate[:-1]).mean()
 step_penalty = torch.stack([
     (output.steps[i + 1].latent - output.steps[i].latent).square().mean()
     for i in range(len(output.steps) - 1)
 ]).mean()
-loss = loss + 0.5 * monotonic + 1e-3 * step_penalty
+loss = final_loss + 0.1 * auxiliary_loss + 0.1 * monotonic + 1e-3 * step_penalty
 ```
+
+原始更新 `alpha * diagonal * gradient` 还会按样本裁剪，使每一步 latent 更新的 L2 范数
+不超过默认 0.25。冻结 initializer 时只对其输出 latent 重新开启梯度，以便继续计算
+\(\partial L/\partial u\)，但 initializer 参数不会收到梯度。联合微调完成后比较两个阶段
+的最佳验证 Loss，选择较好的阶段写入最终 checkpoint。
 
 随后用 AdamW、梯度裁剪、验证集、早停和 checkpoint 更新网络参数。推理时给定新 \(\lambda\)，可以只用 initializer，也可以追加 \(K\) 步 refiner。无论训练 smooth loss 多低，最终结论都应由保留物理 cutoff 的 SPMe/DFN 重新评价。
 

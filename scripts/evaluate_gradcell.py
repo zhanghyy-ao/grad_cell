@@ -84,6 +84,9 @@ def main() -> None:
             capacity_multiplier=capacity_multiplier,
         ),
         objective=objective,
+        max_refinement_update_norm=float(
+            config.get("max_refinement_update_norm", 0.25)
+        ),
     ).double()
     model.load_state_dict(checkpoint["model"])
     model.eval()
