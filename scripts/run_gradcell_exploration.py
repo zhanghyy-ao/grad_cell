@@ -12,6 +12,7 @@ STAGES = (
     "reference-front",
     "train-k0",
     "evaluate-k0",
+    "evaluate-k0-unseen",
     "train-refiner",
     "evaluate-refiner",
     "verify-dfn",
@@ -60,6 +61,7 @@ def main() -> None:
     k0_checkpoint = output_root / f"k0_s{args.model_seed}" / "model.pt"
     refiner_checkpoint = output_root / f"k{args.refinement_steps}_s{args.model_seed}" / "model.pt"
     k0_eval = output_root / f"k0_s{args.model_seed}" / "evaluation_spme"
+    k0_unseen_eval = output_root / f"k0_s{args.model_seed}" / "evaluation_spme_unseen"
     refiner_eval = output_root / f"k{args.refinement_steps}_s{args.model_seed}" / "evaluation_spme"
 
     commands = {
@@ -126,6 +128,20 @@ def main() -> None:
             "--output-dir",
             str(k0_eval),
         ],
+        "evaluate-k0-unseen": [
+            python,
+            "scripts/evaluate_unseen_preferences.py",
+            "--checkpoint",
+            str(k0_checkpoint),
+            "--reference-front",
+            str(front),
+            "--refinement-steps",
+            "0",
+            "--base-grid-points",
+            str(args.preference_points),
+            "--output-dir",
+            str(k0_unseen_eval),
+        ],
         "train-refiner": [
             python,
             "scripts/train_mvp.py",
@@ -173,6 +189,7 @@ def main() -> None:
         "reference-front": data,
         "train-k0": front,
         "evaluate-k0": k0_checkpoint,
+        "evaluate-k0-unseen": k0_checkpoint,
         "train-refiner": front,
         "evaluate-refiner": refiner_checkpoint,
         "verify-dfn": refiner_eval / "candidates.npz",

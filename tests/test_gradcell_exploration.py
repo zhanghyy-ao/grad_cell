@@ -58,6 +58,13 @@ def test_evenly_spaced_indices_include_endpoints() -> None:
     assert indices[-1] == 10
 
 
+def test_unseen_midpoint_preferences_are_between_grid_points() -> None:
+    module = load_script("evaluate_unseen_preferences")
+    values = module.midpoint_preferences(5)
+    assert np.allclose(values, [0.125, 0.375, 0.625, 0.875])
+    assert not np.isin(values, np.linspace(0.0, 1.0, 5)).any()
+
+
 def test_scalarized_loss_penalizes_high_rate_constraint_violation() -> None:
     bounds = {
         "energy_ideal": 10.0,

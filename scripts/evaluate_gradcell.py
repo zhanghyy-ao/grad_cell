@@ -23,13 +23,24 @@ def main() -> None:
     parser.add_argument("--evaluation-model", choices=("SPMe", "DFN"), default="SPMe")
     parser.add_argument("--refinement-steps", type=int)
     parser.add_argument("--preference-points", type=int, default=11)
+    parser.add_argument(
+        "--preference-values",
+        type=float,
+        nargs="+",
+        help="Explicit lambda values in [0,1]; overrides --preference-points.",
+    )
     parser.add_argument("--time-points", type=int, default=151)
     parser.add_argument("--calibration-rate", type=float, default=0.1)
     parser.add_argument("--calibration-iterations", type=int, default=2)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
-    if args.preference_points < 2:
+    if args.preference_values is None and args.preference_points < 2:
         parser.error("--preference-points must be at least 2")
+    if args.preference_values is not None and (
+        len(args.preference_values) < 2
+        or any(value < 0.0 or value > 1.0 for value in args.preference_values)
+    ):
+        parser.error("--preference-values requires at least two values in [0,1]")
 
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = checkpoint.get("model_config", {})
@@ -76,7 +87,11 @@ def main() -> None:
     ).double()
     model.load_state_dict(checkpoint["model"])
     model.eval()
-    preferences = np.linspace(0.0, 1.0, args.preference_points)
+    preferences = (
+        np.asarray(args.preference_values, dtype=np.float64)
+        if args.preference_values is not None
+        else np.linspace(0.0, 1.0, args.preference_points)
+    )
     with torch.enable_grad():
         output = model(torch.from_numpy(preferences).double(), num_steps=refinement_steps)
     latent = output.final.latent.detach()
@@ -131,7 +146,8 @@ def main() -> None:
         "capacity_formula": capacity_formula,
         "capacity_multiplier": capacity_multiplier,
         "refinement_steps": refinement_steps,
-        "preference_points": args.preference_points,
+        "preference_points": len(preferences),
+        "preference_values": preferences.tolist(),
         "success_rate": float(valid.mean()),
         "constraint_satisfaction_rate": float(constraint_satisfied[valid].mean())
         if valid.any()
