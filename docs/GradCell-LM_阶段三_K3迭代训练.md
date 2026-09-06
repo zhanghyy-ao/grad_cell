@@ -43,6 +43,70 @@ python scripts/train_language_stage3_k3_refiner.py \
   --steps 300 --refinement-steps 3
 ```
 
+## 🚀 A100 40GB运行指令
+
+S3加载S2初始设计并只训练refiner。A100直接使用BF16，不传`--load-in-4bit`。开始前检查
+S1 adapter、S2 checkpoint和参考前沿：
+
+```bash
+cd grad_cell
+source .venv/bin/activate
+export PYTHONPATH="$PWD/src"
+export CUDA_VISIBLE_DEVICES=0
+export TOKENIZERS_PARALLELISM=false
+
+test -d results/gradcell_lm/stage1_s7/qwen_adapter
+test -f results/gradcell_lm/stage1_s7/language_heads.pt
+test -s results/gradcell_lm/stage2_k0_s7.pt
+test -f results/gradcell_exploration/reference/pareto_front_1c5c6c.npz
+mkdir -p results/gradcell_lm/logs
+```
+
+先运行5步K=3短任务。每个任务需要评价`u0...u3`，物理求解次数约为K=0的4倍：
+
+```bash
+python scripts/train_language_stage3_k3_refiner.py \
+  --stage1-dir results/gradcell_lm/stage1_s7 \
+  --stage2-checkpoint results/gradcell_lm/stage2_k0_s7.pt \
+  --reference-front results/gradcell_exploration/reference/pareto_front_1c5c6c.npz \
+  --output results/gradcell_lm/stage3_k3_smoke_s7.pt \
+  --backend pybamm --physics-model SPMe \
+  --steps 5 --batch-size 1 --learning-rate 3e-4 \
+  --refinement-steps 3 --validation-interval 5
+```
+
+短任务通过后启动正式训练：
+
+```bash
+nohup python scripts/train_language_stage3_k3_refiner.py \
+  --stage1-dir results/gradcell_lm/stage1_s7 \
+  --stage2-checkpoint results/gradcell_lm/stage2_k0_s7.pt \
+  --reference-front results/gradcell_exploration/reference/pareto_front_1c5c6c.npz \
+  --output results/gradcell_lm/stage3_k3_s7.pt \
+  --backend pybamm --physics-model SPMe \
+  --steps 300 --batch-size 1 --learning-rate 3e-4 \
+  --refinement-steps 3 --validation-interval 25 \
+  > results/gradcell_lm/logs/stage3_k3_s7.log 2>&1 &
+
+echo $! > results/gradcell_lm/logs/stage3_k3_s7.pid
+tail -f results/gradcell_lm/logs/stage3_k3_s7.log
+```
+
+监控训练：
+
+```bash
+watch -n 2 nvidia-smi
+ps -fp "$(cat results/gradcell_lm/logs/stage3_k3_s7.pid)"
+```
+
+完成后检查：
+
+```bash
+test -s results/gradcell_lm/stage3_k3_s7.pt
+ls -lh results/gradcell_lm/stage3_k3_s7.pt
+tail -n 20 results/gradcell_lm/logs/stage3_k3_s7.log
+```
+
 ## 输出设计
 
 ```bash
@@ -50,8 +114,16 @@ python scripts/generate_language_material_design.py \
   --stage1-dir results/gradcell_lm/stage1_s7 \
   --checkpoint results/gradcell_lm/stage3_k3_s7.pt \
   --reference-front results/gradcell_exploration/reference/pareto_front_1c5c6c.npz \
-  --preference 0.7 --refinement-steps 3 --load-in-4bit
+  --preference 0.7 \
+  --target-energy 155 \
+  --min-retention-5c 0.50 \
+  --min-retention-6c 0.44 \
+  --refinement-steps 3 \
+  --backend pybamm --physics-model SPMe
 ```
+
+如果输出中的`requirements_satisfied`为`false`，应保留该结果并检查性能差值，不要手工修改
+JSON参数冒充可行设计。
 
 ## 验收
 

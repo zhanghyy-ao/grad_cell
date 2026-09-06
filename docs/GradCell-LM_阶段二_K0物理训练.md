@@ -44,6 +44,75 @@ python scripts/train_language_stage2_k0_physics.py \
   --steps 1000 --batch-size 1
 ```
 
+## 🚀 A100 40GB运行指令
+
+本阶段Qwen和LoRA冻结，A100直接使用BF16，不传`--load-in-4bit`。PyBaMM通常运行在CPU，
+因此建议先检查CPU核心数和内存：
+
+```bash
+cd grad_cell
+source .venv/bin/activate
+export PYTHONPATH="$PWD/src"
+export CUDA_VISIBLE_DEVICES=0
+export TOKENIZERS_PARALLELISM=false
+
+nvidia-smi
+lscpu | head -n 20
+free -h
+```
+
+检查S1输入和参考前沿：
+
+```bash
+test -d results/gradcell_lm/stage1_s7/qwen_adapter
+test -f results/gradcell_lm/stage1_s7/language_heads.pt
+test -f results/gradcell_exploration/reference/pareto_front_1c5c6c.npz
+mkdir -p results/gradcell_lm/logs
+```
+
+建议先运行10步SPMe短任务，确认PyBaMM反向链和checkpoint写入正常：
+
+```bash
+python scripts/train_language_stage2_k0_physics.py \
+  --stage1-dir results/gradcell_lm/stage1_s7 \
+  --reference-front results/gradcell_exploration/reference/pareto_front_1c5c6c.npz \
+  --output results/gradcell_lm/stage2_k0_smoke_s7.pt \
+  --backend pybamm --physics-model SPMe \
+  --steps 10 --batch-size 1 --learning-rate 3e-5 \
+  --validation-interval 5
+```
+
+短任务通过后启动正式S2：
+
+```bash
+nohup python scripts/train_language_stage2_k0_physics.py \
+  --stage1-dir results/gradcell_lm/stage1_s7 \
+  --reference-front results/gradcell_exploration/reference/pareto_front_1c5c6c.npz \
+  --output results/gradcell_lm/stage2_k0_s7.pt \
+  --backend pybamm --physics-model SPMe \
+  --steps 1000 --batch-size 1 --learning-rate 3e-5 \
+  --validation-interval 25 \
+  > results/gradcell_lm/logs/stage2_k0_s7.log 2>&1 &
+
+echo $! > results/gradcell_lm/logs/stage2_k0_s7.pid
+tail -f results/gradcell_lm/logs/stage2_k0_s7.log
+```
+
+运行中同时观察GPU和进程：
+
+```bash
+watch -n 2 nvidia-smi
+ps -fp "$(cat results/gradcell_lm/logs/stage2_k0_s7.pid)"
+```
+
+完成后检查checkpoint：
+
+```bash
+test -s results/gradcell_lm/stage2_k0_s7.pt
+ls -lh results/gradcell_lm/stage2_k0_s7.pt
+tail -n 20 results/gradcell_lm/logs/stage2_k0_s7.log
+```
+
 ## 验收与对照
 
 - 三倍率求解成功率和硬约束满足率；

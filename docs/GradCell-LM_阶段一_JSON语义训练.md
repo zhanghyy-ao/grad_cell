@@ -62,7 +62,7 @@ JSON。本阶段不调用 PyBaMM，避免昂贵物理求解干扰基础语法与
 
 ## 模型与损失
 
-Qwen 使用 4-bit NF4 和 LoRA。总损失为：
+Qwen 使用 LoRA；8GB显存环境可以使用4-bit NF4，A100 40GB直接使用BF16。总损失为：
 
 ```text
 L1 = L_causal_json
@@ -89,6 +89,86 @@ python scripts/train_language_stage1_semantic.py \
   --data data/gradcell_lm/k0_distillation_s7.jsonl \
   --output-dir results/gradcell_lm/stage1_s7 \
   --load-in-4bit
+```
+
+## 🚀 A100 40GB运行指令
+
+A100 40GB直接加载Qwen3-8B BF16权重，不传`--load-in-4bit`。首次运行先完成环境检查：
+
+```bash
+git pull origin main
+cd grad_cell
+source .venv/bin/activate
+
+bash scripts/setup_language_gpu.sh
+export PYTHONPATH="$PWD/src"
+export CUDA_VISIBLE_DEVICES=0
+export TOKENIZERS_PARALLELISM=false
+
+python - <<'PY'
+import torch
+print("torch:", torch.__version__)
+print("cuda:", torch.version.cuda)
+print("gpu:", torch.cuda.get_device_name(0))
+print("bf16:", torch.cuda.is_bf16_supported())
+assert torch.cuda.is_available()
+assert torch.cuda.is_bf16_supported()
+PY
+```
+
+确认K=0 checkpoint和参考前沿存在：
+
+```bash
+test -f results/gradcell_exploration/k0_s7/model.pt
+test -f results/gradcell_exploration/reference/pareto_front_1c5c6c.npz
+mkdir -p data/gradcell_lm results/gradcell_lm/logs
+```
+
+生成结构化训练集：
+
+```bash
+python scripts/generate_language_design_data.py \
+  --checkpoint results/gradcell_exploration/k0_s7/model.pt \
+  --reference-front results/gradcell_exploration/reference/pareto_front_1c5c6c.npz \
+  --samples 4096 --bins 256 --seed 7 \
+  --output data/gradcell_lm/k0_distillation_s7.jsonl
+
+wc -l data/gradcell_lm/k0_distillation_s7.jsonl
+head -n 1 data/gradcell_lm/k0_distillation_s7.jsonl
+```
+
+后台启动S1。A100 40GB建议`batch-size=2`、梯度累积8次，不使用4-bit：
+
+```bash
+nohup python scripts/train_language_stage1_semantic.py \
+  --data data/gradcell_lm/k0_distillation_s7.jsonl \
+  --output-dir results/gradcell_lm/stage1_s7 \
+  --model-name Qwen/Qwen3-8B \
+  --epochs 3 --batch-size 2 --gradient-accumulation 8 \
+  --learning-rate 1e-4 --max-length 512 --bins 256 \
+  --lora-rank 16 --lora-alpha 32 \
+  --schema-penalty-weight 2.0 \
+  --latent-weight 1.0 --level-weight 0.25 \
+  --feasibility-penalty-weight 10.0 --seed 7 \
+  > results/gradcell_lm/logs/stage1_s7.log 2>&1 &
+
+echo $! > results/gradcell_lm/logs/stage1_s7.pid
+tail -f results/gradcell_lm/logs/stage1_s7.log
+```
+
+另开终端监控：
+
+```bash
+watch -n 2 nvidia-smi
+```
+
+S1结束后检查产物：
+
+```bash
+test -d results/gradcell_lm/stage1_s7/qwen_adapter
+test -f results/gradcell_lm/stage1_s7/language_heads.pt
+test -f results/gradcell_lm/stage1_s7/metrics.json
+cat results/gradcell_lm/stage1_s7/metrics.json
 ```
 
 ## 验收
