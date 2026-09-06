@@ -8,6 +8,20 @@ import torch
 TASK_TAGS = (
     "<TASK>",
     "</TASK>",
+    "<MATERIAL_CONTEXT>",
+    "</MATERIAL_CONTEXT>",
+    "<MATERIAL_PARAMETER_SET>",
+    "</MATERIAL_PARAMETER_SET>",
+    "<MATERIAL_PROPERTIES_MODE>",
+    "</MATERIAL_PROPERTIES_MODE>",
+    "<OPERATING_CONDITION>",
+    "</OPERATING_CONDITION>",
+    "<TEMPERATURE_K>",
+    "</TEMPERATURE_K>",
+    "<DISCHARGE_PROTOCOL>",
+    "</DISCHARGE_PROTOCOL>",
+    "<PERFORMANCE_REQUIREMENTS>",
+    "</PERFORMANCE_REQUIREMENTS>",
     "<OBJECTIVE_A>",
     "</OBJECTIVE_A>",
     "<OBJECTIVE_B>",
@@ -20,6 +34,32 @@ TASK_TAGS = (
     "</MIN_R5>",
     "<MIN_R6>",
     "</MIN_R6>",
+    "<PREFERENCE_PROFILE>",
+    "</PREFERENCE_PROFILE>",
+    "<ENERGY_PRIORITY>",
+    "</ENERGY_PRIORITY>",
+    "<RATE_PRIORITY>",
+    "</RATE_PRIORITY>",
+    "<DESIGN_CONSTRAINTS>",
+    "</DESIGN_CONSTRAINTS>",
+    "<POSITIVE_POROSITY_RANGE>",
+    "</POSITIVE_POROSITY_RANGE>",
+    "<NEGATIVE_POROSITY_RANGE>",
+    "</NEGATIVE_POROSITY_RANGE>",
+    "<SEPARATOR_POROSITY_RANGE>",
+    "</SEPARATOR_POROSITY_RANGE>",
+    "<NP_RATIO_RANGE>",
+    "</NP_RATIO_RANGE>",
+    "<CAPACITY_BALANCE>",
+    "</CAPACITY_BALANCE>",
+    "<FEASIBILITY_POLICY>",
+    "</FEASIBILITY_POLICY>",
+    "<OUTPUT_CONTRACT>",
+    "</OUTPUT_CONTRACT>",
+    "<OUTPUT_SCHEMA>",
+    "</OUTPUT_SCHEMA>",
+    "<SELECTION_POLICY>",
+    "</SELECTION_POLICY>",
     "<DESIGN>",
     "</DESIGN>",
     "<U0>",
@@ -41,6 +81,8 @@ class StructuredPreferenceTask:
     target_energy: float = 150.0
     min_retention_5c: float = 0.50
     min_retention_6c: float = 0.44
+    temperature_k: float = 298.15
+    material_parameter_set: str = "Chen2020"
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.preference <= 1.0:
@@ -51,6 +93,12 @@ class StructuredPreferenceTask:
             raise ValueError("min_retention_5c must be in [0, 1]")
         if not 0.0 <= self.min_retention_6c <= 1.0:
             raise ValueError("min_retention_6c must be in [0, 1]")
+        if self.temperature_k != 298.15:
+            raise ValueError(
+                "the current GradCell physics backend only supports the fixed 298.15 K task context"
+            )
+        if self.material_parameter_set != "Chen2020":
+            raise ValueError("the current design space only supports the Chen2020 parameter set")
 
 
 class GradCellLanguageCodec:
@@ -74,16 +122,52 @@ class GradCellLanguageCodec:
 
     def serialize_task(self, task: StructuredPreferenceTask) -> str:
         level = self.preference_level(task.preference)
+        energy_priority = self._priority_label(task.preference)
+        rate_priority = self._priority_label(1.0 - task.preference)
         return (
             "<TASK>\n"
-            "<OBJECTIVE_A>ENERGY_1C</OBJECTIVE_A>\n"
-            "<OBJECTIVE_B>MIN_RETENTION_5C_6C</OBJECTIVE_B>\n"
+            "<MATERIAL_CONTEXT>\n"
+            f"<MATERIAL_PARAMETER_SET>{task.material_parameter_set}</MATERIAL_PARAMETER_SET>\n"
+            "<MATERIAL_PROPERTIES_MODE>FIXED</MATERIAL_PROPERTIES_MODE>\n"
+            "</MATERIAL_CONTEXT>\n"
+            "<OPERATING_CONDITION>\n"
+            f"<TEMPERATURE_K>{task.temperature_k:.2f}</TEMPERATURE_K>\n"
+            "<DISCHARGE_PROTOCOL>1C,5C,6C_CONSTANT_CURRENT</DISCHARGE_PROTOCOL>\n"
+            "</OPERATING_CONDITION>\n"
+            "<PERFORMANCE_REQUIREMENTS>\n"
+            "<OBJECTIVE_A>SPECIFIC_ENERGY_1C_WH_KG</OBJECTIVE_A>\n"
+            "<OBJECTIVE_B>ENERGY_RETENTION_5C_6C</OBJECTIVE_B>\n"
             f"<TARGET_ENERGY>{task.target_energy:.4f}</TARGET_ENERGY>\n"
             f"<MIN_R5>{task.min_retention_5c:.6f}</MIN_R5>\n"
             f"<MIN_R6>{task.min_retention_6c:.6f}</MIN_R6>\n"
+            "</PERFORMANCE_REQUIREMENTS>\n"
+            "<PREFERENCE_PROFILE>\n"
             f"<PREFERENCE><LEVEL_{level:03d}></PREFERENCE>\n"
+            f"<ENERGY_PRIORITY>{energy_priority}</ENERGY_PRIORITY>\n"
+            f"<RATE_PRIORITY>{rate_priority}</RATE_PRIORITY>\n"
+            "</PREFERENCE_PROFILE>\n"
+            "<DESIGN_CONSTRAINTS>\n"
+            "<POSITIVE_POROSITY_RANGE>0.20,0.42</POSITIVE_POROSITY_RANGE>\n"
+            "<NEGATIVE_POROSITY_RANGE>0.20,0.42</NEGATIVE_POROSITY_RANGE>\n"
+            "<SEPARATOR_POROSITY_RANGE>0.35,0.60</SEPARATOR_POROSITY_RANGE>\n"
+            "<NP_RATIO_RANGE>1.02,1.25</NP_RATIO_RANGE>\n"
+            "<CAPACITY_BALANCE>ANALYTIC_NEGATIVE_ACTIVE_FRACTION</CAPACITY_BALANCE>\n"
+            "<FEASIBILITY_POLICY>HARD_FEASIBLE_DECODER</FEASIBILITY_POLICY>\n"
+            "</DESIGN_CONSTRAINTS>\n"
+            "<OUTPUT_CONTRACT>\n"
+            "<OUTPUT_SCHEMA>gradcell.material_design.v1</OUTPUT_SCHEMA>\n"
+            "<SELECTION_POLICY>MINIMUM_PHYSICS_LOSS</SELECTION_POLICY>\n"
+            "</OUTPUT_CONTRACT>\n"
             "</TASK>\n<DESIGN>"
         )
+
+    @staticmethod
+    def _priority_label(value: float) -> str:
+        if value >= 2.0 / 3.0:
+            return "HIGH"
+        if value <= 1.0 / 3.0:
+            return "LOW"
+        return "MEDIUM"
 
     def quantize(self, latent: torch.Tensor) -> torch.Tensor:
         normalized = (latent.clamp(-self.latent_limit, self.latent_limit) + self.latent_limit)

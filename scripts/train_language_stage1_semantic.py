@@ -46,7 +46,7 @@ def main() -> None:
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--bins", type=int, default=256)
-    parser.add_argument("--max-length", type=int, default=384)
+    parser.add_argument("--max-length", type=int, default=512)
     parser.add_argument("--schema-penalty-weight", type=float, default=2.0)
     parser.add_argument("--latent-weight", type=float, default=1.0)
     parser.add_argument("--level-weight", type=float, default=0.25)
