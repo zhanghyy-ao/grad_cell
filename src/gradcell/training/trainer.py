@@ -37,6 +37,9 @@ def train(
     auxiliary_loss_weight: float = 0.1,
     monotonic_weight: float = 0.1,
     step_penalty_weight: float = 1e-3,
+    initial_loss_weight: float = 0.0,
+    initializer_teacher=None,
+    initializer_distillation_weight: float = 0.0,
     phase: str = "joint",
 ) -> TrainResult:
     """训练模型，并支持验证、早停、断点恢复和 JSONL 结构化日志。"""
@@ -100,6 +103,8 @@ def train(
         auxiliary_loss = final_loss.new_zeros(())
         monotonic = final_loss.new_zeros(())
         step_penalty = final_loss.new_zeros(())
+        initial_loss = intermediate[0].mean()
+        initializer_distillation = final_loss.new_zeros(())
         loss = final_loss
         if len(output.steps) > 1:
             auxiliary_loss = intermediate[:-1].mean()
@@ -116,6 +121,15 @@ def train(
                 + monotonic_weight * monotonic
                 + step_penalty_weight * step_penalty
             )
+        if initial_loss_weight:
+            loss = loss + initial_loss_weight * initial_loss
+        if initializer_teacher is not None and initializer_distillation_weight:
+            with torch.no_grad():
+                teacher_latent = initializer_teacher(preference)
+            initializer_distillation = (
+                output.steps[0].latent - teacher_latent
+            ).square().mean()
+            loss = loss + initializer_distillation_weight * initializer_distillation
         if not torch.isfinite(loss):
             raise FloatingPointError(
                 f"Non-finite training loss detected at step {iteration}: {loss.detach()}"
@@ -137,6 +151,8 @@ def train(
             "auxiliary_loss": float(auxiliary_loss.detach()),
             "monotonic_penalty": float(monotonic.detach()),
             "step_penalty": float(step_penalty.detach()),
+            "initial_loss": float(initial_loss.detach()),
+            "initializer_distillation": float(initializer_distillation.detach()),
             "physics_success_rate": success_rate,
         }
         if validation_interval and iteration % validation_interval == 0:
@@ -149,6 +165,8 @@ def train(
                     [step.loss for step in val_output.steps], dim=0
                 )
                 val_objective = val_intermediate[-1].mean()
+                val_initial_loss = val_intermediate[0].mean()
+                val_initializer_distillation = val_objective.new_zeros(())
                 if len(val_output.steps) > 1:
                     val_auxiliary = val_intermediate[:-1].mean()
                     val_monotonic = torch.relu(
@@ -168,10 +186,26 @@ def train(
                         + monotonic_weight * val_monotonic
                         + step_penalty_weight * val_step_penalty
                     )
+                if initial_loss_weight:
+                    val_objective = val_objective + initial_loss_weight * val_initial_loss
+                if initializer_teacher is not None and initializer_distillation_weight:
+                    with torch.no_grad():
+                        teacher_latent = initializer_teacher(validation_preferences)
+                    val_initializer_distillation = (
+                        val_output.steps[0].latent - teacher_latent
+                    ).square().mean()
+                    val_objective = (
+                        val_objective
+                        + initializer_distillation_weight * val_initializer_distillation
+                    )
                 val_loss = float(val_objective.detach())
             model.train()
             validation_losses.append(val_loss)
             record["validation_loss"] = val_loss
+            record["validation_initial_loss"] = float(val_initial_loss.detach())
+            record["validation_initializer_distillation"] = float(
+                val_initializer_distillation.detach()
+            )
             if val_loss < best_validation_loss - min_delta:
                 best_validation_loss, best_step, stale_steps = val_loss, iteration, 0
                 best_model_state = {

@@ -468,8 +468,10 @@ preference → embedding → initializer → u0 → evaluate
 
 K>0 的正式训练从已验证的 K=0 checkpoint 加载 task encoder 与 initializer。第一阶段
 冻结这两个模块，仅训练 refiner；第二阶段解冻后以较小学习率联合微调。聚合目标以最终
-`L(uK)` 为主，中间 Loss 使用较小辅助权重。每一步 latent update 还会按 L2 范数裁剪，
-联合微调若降低验证性能则自动回退到冻结阶段最佳模型。
+`L(uK)` 为主，中间 Loss 使用较小辅助权重。联合阶段还对 `L(u0)` 单独加权，并将
+initializer latent 蒸馏到冻结的预训练 K=0 教师。每一步 latent update 会按 L2 范数裁剪。
+最终模型必须通过 21 点 K=0 守门：任一点 Loss 增量超过容差或约束满足率下降时自动回退
+到冻结 initializer 的阶段模型；只有 K=0 守门通过且最终 K-step Loss 改善才接受联合模型。
 
 ## 8. Loss 与 benchmark
 

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import torch
 
@@ -57,3 +59,32 @@ def test_training_stops_when_all_physics_samples_fail():
     ).double()
     with pytest.raises(RuntimeError, match="All 1C/5C/6C physics simulations failed"):
         train(model, steps=1, batch_size=2, validation_interval=0)
+
+
+def test_joint_training_logs_k0_preservation_terms(tmp_path):
+    model = build_model()
+
+    def teacher(preference):
+        return torch.ones(
+            preference.shape[0], model.design_space.latent_dim,
+            dtype=preference.dtype, device=preference.device,
+        )
+
+    log_path = tmp_path / "training.jsonl"
+    train(
+        model,
+        steps=1,
+        batch_size=2,
+        refinement_steps=1,
+        validation_interval=1,
+        initial_loss_weight=0.3,
+        initializer_teacher=teacher,
+        initializer_distillation_weight=1.0,
+        log_path=log_path,
+    )
+
+    record = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert record["initial_loss"] > 0.0
+    assert record["initializer_distillation"] > 0.0
+    assert record["validation_initial_loss"] > 0.0
+    assert record["validation_initializer_distillation"] > 0.0

@@ -108,18 +108,23 @@ python scripts/run_gradcell_exploration.py \
   --refinement-steps 3 \
   --refiner-frozen-steps 200 \
   --refiner-joint-steps 100 \
-  --refiner-joint-lr-scale 0.2 \
+  --refiner-joint-lr-scale 0.05 \
   --refiner-auxiliary-weight 0.1 \
+  --refiner-initial-loss-weight 0.3 \
+  --refiner-distillation-weight 1.0 \
+  --k0-guard-loss-tolerance 0.002 \
   --max-refinement-update-norm 0.25 \
   --model-seed 7
 ```
 
 该阶段不再从头联合训练。脚本从同一输出目录的 `k0_s7/model.pt` 只加载 task encoder
 和 initializer，保留全新 refiner；前 200 步冻结 initializer stack，只训练 refiner；后
-100 步解冻全部网络，以原学习率的 0.2 倍联合微调。Loss 以最终 `L(u3)` 为主，中间
-`L(u0:u2)` 仅以 0.1 权重辅助，并惩罚实际变差的 refinement。每一步 latent 更新的 L2
-范数硬限制为 0.25。若联合微调的最佳验证 Loss 差于冻结阶段，最终 checkpoint 自动
-回退到冻结阶段最佳状态。
+100 步解冻全部网络，以原学习率的 0.05 倍联合微调。Loss 以最终 `L(u3)` 为主，中间
+`L(u0:u2)` 以 0.1 权重辅助，另以 0.3 权重保护 `L(u0)`，并以 1.0 权重把 initializer
+latent 蒸馏到冻结的预训练 K=0 输出。每一步 latent 更新的 L2 范数硬限制为 0.25。
+联合结束后在 21 个固定偏好点执行 K=0 能力守门：若任一点 Loss 增量超过 0.002、K=0
+约束满足率下降，或最终 K=3 平均 Loss 未优于冻结阶段，最终 checkpoint 自动回退到冻结
+initializer 的阶段最佳状态。守门严格保证这 21 个点，连续区间仍需离网格评价确认。
 最终模型写入 `k3_staged_s7/model.pt`，不会覆盖旧的从头联合训练 `k3_s7/model.pt`，便于
 进行公平对照。
 

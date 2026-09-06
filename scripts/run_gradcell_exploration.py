@@ -35,8 +35,11 @@ def main() -> None:
     parser.add_argument("--refinement-steps", type=int, default=3)
     parser.add_argument("--refiner-frozen-steps", type=int, default=200)
     parser.add_argument("--refiner-joint-steps", type=int, default=100)
-    parser.add_argument("--refiner-joint-lr-scale", type=float, default=0.2)
+    parser.add_argument("--refiner-joint-lr-scale", type=float, default=0.05)
     parser.add_argument("--refiner-auxiliary-weight", type=float, default=0.1)
+    parser.add_argument("--refiner-initial-loss-weight", type=float, default=0.3)
+    parser.add_argument("--refiner-distillation-weight", type=float, default=1.0)
+    parser.add_argument("--k0-guard-loss-tolerance", type=float, default=2e-3)
     parser.add_argument("--max-refinement-update-norm", type=float, default=0.25)
     parser.add_argument("--preference-points", type=int, default=11)
     parser.add_argument("--dfn-candidates", type=int, default=11)
@@ -178,6 +181,12 @@ def main() -> None:
             str(args.refiner_joint_lr_scale),
             "--auxiliary-loss-weight",
             str(args.refiner_auxiliary_weight),
+            "--initial-loss-weight",
+            str(args.refiner_initial_loss_weight),
+            "--initializer-distillation-weight",
+            str(args.refiner_distillation_weight),
+            "--k0-guard-loss-tolerance",
+            str(args.k0_guard_loss_tolerance),
             "--max-refinement-update-norm",
             str(args.max_refinement_update_norm),
             "--reference-front",

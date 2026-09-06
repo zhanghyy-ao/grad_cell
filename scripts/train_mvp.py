@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 
@@ -39,6 +40,9 @@ def main() -> None:
     parser.add_argument("--auxiliary-loss-weight", type=float, default=0.1)
     parser.add_argument("--monotonic-weight", type=float, default=0.1)
     parser.add_argument("--step-penalty-weight", type=float, default=1e-3)
+    parser.add_argument("--initial-loss-weight", type=float, default=0.3)
+    parser.add_argument("--initializer-distillation-weight", type=float, default=1.0)
+    parser.add_argument("--k0-guard-loss-tolerance", type=float, default=2e-3)
     parser.add_argument("--max-refinement-update-norm", type=float, default=0.25)
     parser.add_argument("--current-ramp-time-s", type=float, default=0.0)
     parser.add_argument(
@@ -61,6 +65,10 @@ def main() -> None:
         parser.error("--joint-finetune-steps cannot be negative")
     if not 0.0 < args.joint_learning_rate_scale <= 1.0:
         parser.error("--joint-learning-rate-scale must be in (0,1]")
+    if args.initial_loss_weight < 0.0 or args.initializer_distillation_weight < 0.0:
+        parser.error("K=0 preservation loss weights cannot be negative")
+    if args.k0_guard_loss_tolerance < 0.0:
+        parser.error("--k0-guard-loss-tolerance cannot be negative")
     with ExperimentRun("train_mvp", args, run_dir=args.run_dir) as run:
         torch.manual_seed(args.seed)
         objective = None
@@ -110,6 +118,7 @@ def main() -> None:
             max_refinement_update_norm=args.max_refinement_update_norm,
         ).double()
         initializer_source = None
+        initializer_teacher = None
         if args.initializer_checkpoint is not None:
             source_checkpoint = torch.load(
                 args.initializer_checkpoint, map_location="cpu", weights_only=False
@@ -124,6 +133,16 @@ def main() -> None:
             model_state = model.state_dict()
             model_state.update(transferred)
             model.load_state_dict(model_state)
+            teacher_encoder = copy.deepcopy(model.task_encoder).eval()
+            teacher_initializer = copy.deepcopy(model.initializer).eval()
+            for parameter in teacher_encoder.parameters():
+                parameter.requires_grad_(False)
+            for parameter in teacher_initializer.parameters():
+                parameter.requires_grad_(False)
+
+            def initializer_teacher(preference: torch.Tensor) -> torch.Tensor:
+                return teacher_initializer(teacher_encoder(preference))
+
             initializer_source = str(args.initializer_checkpoint)
             run.event(
                 "initializer_loaded",
@@ -149,6 +168,7 @@ def main() -> None:
         run.event("training_started", parameter_count=sum(p.numel() for p in model.parameters()))
         phase_summaries = []
         selected_phase = "joint"
+        preservation_summary = None
         if args.initializer_checkpoint is None:
             result = train(
                 model,
@@ -168,6 +188,25 @@ def main() -> None:
             combined_losses = result.losses
             combined_validation_losses = result.validation_losses
         else:
+            guard_preferences = torch.linspace(0.0, 1.0, 21, dtype=torch.float64)
+
+            def validation_snapshot(num_steps: int) -> dict:
+                model.eval()
+                with torch.enable_grad():
+                    snapshot = model(guard_preferences, num_steps=num_steps).final
+                model.train()
+                feasible = (
+                    snapshot.status.bool()
+                    & (snapshot.retention_5c >= model.objective.retention_5c_min)
+                    & (snapshot.retention_6c >= model.objective.retention_6c_min)
+                )
+                return {
+                    "losses": snapshot.loss.detach().cpu(),
+                    "mean_loss": float(snapshot.loss.detach().mean()),
+                    "constraint_satisfaction_rate": float(feasible.double().mean()),
+                }
+
+            pretrained_k0 = validation_snapshot(0)
             for parameter in model.task_encoder.parameters():
                 parameter.requires_grad_(False)
             for parameter in model.initializer.parameters():
@@ -202,6 +241,7 @@ def main() -> None:
                 name: value.detach().cpu().clone()
                 for name, value in model.state_dict().items()
             }
+            phase1_final = validation_snapshot(args.refinement_steps)
             for parameter in model.task_encoder.parameters():
                 parameter.requires_grad_(True)
             for parameter in model.initializer.parameters():
@@ -232,6 +272,9 @@ def main() -> None:
                     auxiliary_loss_weight=args.auxiliary_loss_weight,
                     monotonic_weight=args.monotonic_weight,
                     step_penalty_weight=args.step_penalty_weight,
+                    initial_loss_weight=args.initial_loss_weight,
+                    initializer_teacher=initializer_teacher,
+                    initializer_distillation_weight=args.initializer_distillation_weight,
                     phase="joint_finetune",
                 )
                 result = phase2
@@ -240,7 +283,35 @@ def main() -> None:
                 phase_summaries.append(
                     {"phase": "joint_finetune", "steps": len(phase2.losses), "best_validation_loss": phase2.best_validation_loss}
                 )
-                if phase1.best_validation_loss <= phase2.best_validation_loss:
+                joint_final = validation_snapshot(args.refinement_steps)
+                joint_k0 = validation_snapshot(0)
+                max_k0_loss_increase = float(
+                    (joint_k0["losses"] - pretrained_k0["losses"]).max()
+                )
+                k0_guard_passed = (
+                    max_k0_loss_increase <= args.k0_guard_loss_tolerance
+                    and joint_k0["constraint_satisfaction_rate"]
+                    >= pretrained_k0["constraint_satisfaction_rate"]
+                )
+                joint_improves_final = joint_final["mean_loss"] < phase1_final["mean_loss"]
+                preservation_summary = {
+                    "guard_preferences": len(guard_preferences),
+                    "loss_tolerance": args.k0_guard_loss_tolerance,
+                    "pretrained_k0_mean_loss": pretrained_k0["mean_loss"],
+                    "joint_k0_mean_loss": joint_k0["mean_loss"],
+                    "max_k0_loss_increase": max_k0_loss_increase,
+                    "k0_constraint_rate_before": pretrained_k0[
+                        "constraint_satisfaction_rate"
+                    ],
+                    "k0_constraint_rate_after": joint_k0[
+                        "constraint_satisfaction_rate"
+                    ],
+                    "k0_guard_passed": k0_guard_passed,
+                    "frozen_final_mean_loss": phase1_final["mean_loss"],
+                    "joint_final_mean_loss": joint_final["mean_loss"],
+                    "joint_improves_final": joint_improves_final,
+                }
+                if not (k0_guard_passed and joint_improves_final):
                     model.load_state_dict(phase1_state)
                     result = phase1
                     selected_phase = "frozen_refiner"
@@ -251,6 +322,15 @@ def main() -> None:
                     phase=selected_phase,
                     frozen_validation_loss=phase1.best_validation_loss,
                     joint_validation_loss=phase2.best_validation_loss,
+                    frozen_final_mean_loss=phase1_final["mean_loss"],
+                    joint_final_mean_loss=joint_final["mean_loss"],
+                    pretrained_k0_mean_loss=pretrained_k0["mean_loss"],
+                    joint_k0_mean_loss=joint_k0["mean_loss"],
+                    max_k0_loss_increase=max_k0_loss_increase,
+                    k0_constraint_rate_before=pretrained_k0["constraint_satisfaction_rate"],
+                    k0_constraint_rate_after=joint_k0["constraint_satisfaction_rate"],
+                    k0_guard_passed=k0_guard_passed,
+                    joint_improves_final=joint_improves_final,
                 )
             else:
                 selected_phase = "frozen_refiner"
@@ -282,9 +362,13 @@ def main() -> None:
                     "auxiliary_loss_weight": args.auxiliary_loss_weight,
                     "monotonic_weight": args.monotonic_weight,
                     "step_penalty_weight": args.step_penalty_weight,
+                    "initial_loss_weight": args.initial_loss_weight,
+                    "initializer_distillation_weight": args.initializer_distillation_weight,
+                    "k0_guard_loss_tolerance": args.k0_guard_loss_tolerance,
                     "max_refinement_update_norm": args.max_refinement_update_norm,
                     "training_phases": phase_summaries,
                     "selected_phase": selected_phase,
+                    "k0_preservation": preservation_summary,
                     "seed": args.seed,
                 },
             },
@@ -298,6 +382,7 @@ def main() -> None:
             "stopped_early": result.stopped_early,
             "training_phases": phase_summaries,
             "selected_phase": selected_phase,
+            "k0_preservation": preservation_summary,
         }
         run.event("training_finished", **summary)
         run.save_summary({"result": summary, "artifacts": {"checkpoint": str(args.checkpoint)}})
