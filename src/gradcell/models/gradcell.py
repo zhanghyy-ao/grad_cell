@@ -7,6 +7,7 @@ from torch import nn
 
 from gradcell.design.feasible_decoder import CellDesign, DesignSpace
 from gradcell.losses.scalarization import SmoothTchebycheff
+from gradcell.losses.goal_conditioned import GoalConditionedObjective
 from gradcell.physics.soft_metrics import discharge_metrics
 
 from .initializer import DesignInitializer
@@ -58,11 +59,17 @@ class GradCell(nn.Module):
         self.physics_5c = physics_5c
         self.physics_6c = physics_6c
         self.objective = objective or SmoothTchebycheff()
+        self.goal_objective = GoalConditionedObjective()
         if max_refinement_update_norm <= 0.0:
             raise ValueError("max_refinement_update_norm must be positive")
         self.max_refinement_update_norm = max_refinement_update_norm
 
-    def evaluate(self, latent: torch.Tensor, preference: torch.Tensor) -> GradCellStep:
+    def evaluate(
+        self,
+        latent: torch.Tensor,
+        preference: torch.Tensor,
+        targets: torch.Tensor | None = None,
+    ) -> GradCellStep:
         design = self.design_space(latent)
         y1, status1, _ = self.physics_1c(design.physics_tensor(1.0))
         y5, status5, _ = self.physics_5c(design.physics_tensor(5.0))
@@ -99,9 +106,18 @@ class GradCell(nn.Module):
             energy_1c = metrics1.specific_energy_wh_kg.clamp_min(1e-8)
             valid_retention_5c = metrics5.specific_energy_wh_kg / energy_1c
             valid_retention_6c = metrics6.specific_energy_wh_kg / energy_1c
-            valid_loss = self.objective(
-                valid_energy, valid_retention_5c, valid_retention_6c, preference[valid]
-            )
+            if targets is None:
+                valid_loss = self.objective(
+                    valid_energy, valid_retention_5c, valid_retention_6c, preference[valid]
+                )
+            else:
+                valid_loss = self.goal_objective(
+                    valid_energy,
+                    valid_retention_5c,
+                    valid_retention_6c,
+                    preference[valid],
+                    targets[valid],
+                )
             energy = energy.index_copy(0, valid_indices, valid_energy)
             retention_5c = retention_5c.index_copy(0, valid_indices, valid_retention_5c)
             retention_6c = retention_6c.index_copy(0, valid_indices, valid_retention_6c)
@@ -118,10 +134,17 @@ class GradCell(nn.Module):
             status=status,
         )
 
-    def forward(self, preference: torch.Tensor, num_steps: int = 0) -> GradCellOutput:
+    def forward(
+        self,
+        preference: torch.Tensor,
+        num_steps: int = 0,
+        targets: torch.Tensor | None = None,
+    ) -> GradCellOutput:
         task_embedding = self.task_encoder(preference)
         latent = self.initializer(task_embedding)
-        return self.run_from_embedding(task_embedding, latent, preference, num_steps=num_steps)
+        return self.run_from_embedding(
+            task_embedding, latent, preference, num_steps=num_steps, targets=targets
+        )
 
     def run_from_embedding(
         self,
@@ -130,6 +153,7 @@ class GradCell(nn.Module):
         preference: torch.Tensor,
         *,
         num_steps: int = 0,
+        targets: torch.Tensor | None = None,
     ) -> GradCellOutput:
         """Evaluate and refine an externally encoded task and initial latent."""
         # During frozen-refiner training the initializer has no trainable parameters,
@@ -139,7 +163,7 @@ class GradCell(nn.Module):
         state = None
         steps: list[GradCellStep] = []
         for index in range(num_steps + 1):
-            step = self.evaluate(latent, preference)
+            step = self.evaluate(latent, preference, targets=targets)
             steps.append(step)
             if index == num_steps:
                 break
@@ -147,10 +171,19 @@ class GradCell(nn.Module):
                 step.loss.sum(), latent, create_graph=False, retain_graph=True
             )
             gradient = gradient.detach()
+            if targets is None:
+                progress_feature = step.energy / 250.0
+                rate_feature = torch.minimum(step.retention_5c, step.retention_6c)
+            else:
+                progress_feature = (step.energy - targets[:, 0]) / 160.0
+                rate_feature = torch.minimum(
+                    step.retention_5c - targets[:, 1],
+                    step.retention_6c - targets[:, 2],
+                )
             physics_features = torch.stack(
                 [
-                    step.energy / 250.0,
-                    torch.minimum(step.retention_5c, step.retention_6c),
+                    progress_feature,
+                    rate_feature,
                     step.loss,
                     step.status.to(step.loss.dtype),
                     latent.square().mean(dim=-1),

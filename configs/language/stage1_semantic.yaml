@@ -1,0 +1,19 @@
+stage: 1
+name: qwen3_8b_semantic_json
+model_name: Qwen/Qwen3-8B
+load_in_4bit: true
+lora_rank: 16
+lora_alpha: 32
+epochs: 3
+batch_size: 1
+gradient_accumulation: 16
+learning_rate: 1.0e-4
+loss:
+  causal_json: 1.0
+  schema_penalty: 2.0
+  latent_regression: 1.0
+  level_classification: 0.25
+  feasibility_penalty: 10.0
+acceptance:
+  valid_json_rate: 1.0
+  hard_feasible_rate: 1.0

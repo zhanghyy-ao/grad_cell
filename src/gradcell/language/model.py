@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Protocol
 
 import torch
@@ -9,6 +10,7 @@ from torch import nn
 from gradcell.models.gradcell import GradCell, GradCellOutput
 
 from .codec import GradCellLanguageCodec
+from .json_design import MaterialDesignJSONCodec
 
 
 class HiddenStateBackbone(Protocol):
@@ -32,6 +34,7 @@ class QwenBackbone(nn.Module):
         device_map: str | None = "auto",
         load_in_4bit: bool = False,
         use_lora: bool = False,
+        adapter_path: str | None = None,
         lora_rank: int = 16,
         lora_alpha: int = 32,
         trust_remote_code: bool = False,
@@ -59,7 +62,15 @@ class QwenBackbone(nn.Module):
             quantization_config=quantization_config,
             trust_remote_code=trust_remote_code,
         )
-        if use_lora:
+        if adapter_path is not None:
+            try:
+                from peft import PeftModel
+            except ImportError as exc:
+                raise ImportError("loading a LoRA adapter requires the peft package") from exc
+            self.model = PeftModel.from_pretrained(
+                self.model, adapter_path, is_trainable=use_lora
+            )
+        elif use_lora:
             try:
                 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
             except ImportError as exc:
@@ -90,6 +101,17 @@ class QwenBackbone(nn.Module):
         )
         return outputs.last_hidden_state
 
+    def causal_forward(self, **kwargs):
+        """Run the native causal-LM objective for Stage 1 JSON training."""
+        return self.model(**kwargs, return_dict=True)
+
+    def generate(self, **kwargs) -> torch.Tensor:
+        return self.model.generate(**kwargs)
+
+    def save_adapter(self, output_dir: str) -> None:
+        if hasattr(self.model, "save_pretrained"):
+            self.model.save_pretrained(output_dir)
+
 
 @dataclass
 class LanguageGradCellOutput:
@@ -97,6 +119,8 @@ class LanguageGradCellOutput:
     continuous_latent: torch.Tensor
     token_latent: torch.Tensor
     level_logits: torch.Tensor
+    best_step_index: torch.Tensor
+    best_latent: torch.Tensor
 
 
 class LanguageGradCell(nn.Module):
@@ -166,11 +190,71 @@ class LanguageGradCell(nn.Module):
         preference: torch.Tensor,
         *,
         num_steps: int = 0,
+        targets: torch.Tensor | None = None,
     ) -> LanguageGradCellOutput:
         task_embedding, latent, logits = self.propose(input_ids, attention_mask)
         token_levels = logits.argmax(dim=-1)
         token_latent = self.codec.dequantize(token_levels, dtype=latent.dtype)
+        physics_parameter = next(self.gradcell.parameters())
+        physics_targets = None
+        if targets is not None:
+            physics_targets = targets.to(
+                dtype=physics_parameter.dtype, device=physics_parameter.device
+            )
         steps = self.gradcell.run_from_embedding(
-            task_embedding, latent, preference, num_steps=num_steps
+            task_embedding.to(dtype=physics_parameter.dtype, device=physics_parameter.device),
+            latent.to(dtype=physics_parameter.dtype, device=physics_parameter.device),
+            preference.to(dtype=physics_parameter.dtype, device=physics_parameter.device),
+            num_steps=num_steps,
+            targets=physics_targets,
         )
-        return LanguageGradCellOutput(steps, latent, token_latent, logits)
+        losses = torch.stack([step.loss for step in steps.steps], dim=0)
+        best_step_index = losses.argmin(dim=0)
+        latents = torch.stack([step.latent for step in steps.steps], dim=0)
+        gather_index = best_step_index.reshape(1, -1, 1).expand(1, -1, latents.shape[-1])
+        best_latent = latents.gather(0, gather_index).squeeze(0)
+        return LanguageGradCellOutput(
+            steps, latent, token_latent, logits, best_step_index, best_latent
+        )
+
+    def render_best_json(
+        self,
+        output: LanguageGradCellOutput,
+        targets: torch.Tensor | None = None,
+    ) -> list[str]:
+        json_codec = MaterialDesignJSONCodec(self.gradcell.design_space)
+        design = self.gradcell.design_space(output.best_latent)
+        results = []
+        for index in range(output.best_latent.shape[0]):
+            step_index = int(output.best_step_index[index])
+            step = output.gradcell.steps[step_index]
+            payload = json_codec.design_dict(design, index)
+            performance = {
+                "specific_energy_1c_wh_kg": float(step.energy[index].detach().cpu()),
+                "energy_retention_5c": float(step.retention_5c[index].detach().cpu()),
+                "energy_retention_6c": float(step.retention_6c[index].detach().cpu()),
+                "physics_loss": float(step.loss[index].detach().cpu()),
+                "solver_success": bool(step.status[index]),
+            }
+            payload.update(
+                {
+                    "selected_refinement_step": step_index,
+                    "predicted_performance": performance,
+                }
+            )
+            if targets is not None:
+                target = targets[index].detach().cpu()
+                requirements = {
+                    "target_energy_1c_wh_kg": float(target[0]),
+                    "minimum_energy_retention_5c": float(target[1]),
+                    "minimum_energy_retention_6c": float(target[2]),
+                }
+                payload["requirements"] = requirements
+                payload["requirements_satisfied"] = bool(
+                    performance["solver_success"]
+                    and performance["specific_energy_1c_wh_kg"] >= requirements["target_energy_1c_wh_kg"]
+                    and performance["energy_retention_5c"] >= requirements["minimum_energy_retention_5c"]
+                    and performance["energy_retention_6c"] >= requirements["minimum_energy_retention_6c"]
+                )
+            results.append(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        return results

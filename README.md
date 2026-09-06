@@ -2,29 +2,28 @@
 
 ## GradCell-LM（实验性）
 
-仓库已加入以 `Qwen/Qwen3-8B` 为默认基座的结构化设计语言原型。第一阶段把现有
-GradCell K=0 checkpoint 蒸馏为 `<TASK>...<DESIGN>` 数据，冻结 Qwen，仅训练任务
-projector、连续 latent head 和 256 档 level head；连续 head 可在下一阶段直接接入现有
-硬可行解码器、SPMe sensitivity 与 learned refiner。
+仓库已加入以 `Qwen/Qwen3-8B` 为默认基座的三阶段结构化设计语言原型。Qwen读取带
+目标能量、5C/6C最低保持率和偏好的标签token，输出固定schema的设计JSON；同一隐藏状态
+的连续head接入硬可行解码器、SPMe sensitivity与learned refiner。
 
 ```bash
 pip install -e ".[language,physics,dev]"
 PYTHONPATH=src python scripts/generate_language_design_data.py \
   --checkpoint results/gradcell_exploration/k0_s7/model.pt \
   --samples 4096 --output data/gradcell_lm/k0_distillation_s7.jsonl
-PYTHONPATH=src python scripts/train_language_distillation.py \
+PYTHONPATH=src python scripts/train_language_stage1_semantic.py \
   --data data/gradcell_lm/k0_distillation_s7.jsonl \
-  --output results/gradcell_lm/qwen3_8b_stage1.pt --load-in-4bit
+  --output-dir results/gradcell_lm/stage1_s7 --load-in-4bit
 ```
 
 NVIDIA GPU服务器可先运行 `bash scripts/setup_language_gpu.sh` 安装CUDA 12.4版PyTorch及
-QLoRA依赖，再运行 `bash scripts/run_qwen3_8b_gpu.sh`。8GB显存设备必须使用4-bit加载和
+QLoRA依赖，再运行 `bash scripts/run_language_three_stage.sh`。8GB显存设备必须使用4-bit加载和
 batch size 1；更大显存服务器可以去掉 `--load-in-4bit` 使用BF16。需要微调Qwen时再增加
 `--use-lora`，不要在第一阶段全量训练8B参数。
 
-完整研究问题、数据拆分、基线、消融和验收判据见
-`docs/GradCell-LM_Qwen3-8B实验设计.md`。该路线目前是实验支线，不改变下述已验证的
-Fourier-MLP GradCell 主实验。
+三次训练分别见 `docs/GradCell-LM_阶段一_JSON语义训练.md`、
+`docs/GradCell-LM_阶段二_K0物理训练.md` 和 `docs/GradCell-LM_阶段三_K3迭代训练.md`。
+该路线目前是实验支线，不改变下述已验证的Fourier-MLP GradCell主实验。
 
 GradCell 是一个面向电芯逆向设计的研究原型。当前主实验接收 1C 比能量与 5C/6C 高倍率能量保持率之间的连续性能偏好，先预测满足制造约束的电芯设计，再利用 PyBaMM 一阶物理敏感度改善设计。第二目标定义为 `min(E_5C/E_1C, E_6C/E_1C)`；参考 Pareto 前沿只使用同时满足 5C 和 6C 最低能量保持率约束的样本。旧的 3C 容量保持率因大部分样本落在平台区，已不再作为条件化训练目标。
 

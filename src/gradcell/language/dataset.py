@@ -17,7 +17,8 @@ class LanguageDesignDataset(Dataset):
                 if not line.strip():
                     continue
                 record = json.loads(line)
-                if not {"task_text", "preference", "teacher_latent"} <= record.keys():
+                required = {"task_text", "preference", "teacher_latent"}
+                if not required <= record.keys():
                     raise ValueError(f"invalid record at line {line_number}")
                 if len(record["teacher_latent"]) != 5:
                     raise ValueError(f"teacher_latent must have five values at line {line_number}")
@@ -33,5 +34,9 @@ class LanguageDesignDataset(Dataset):
         return {
             "task_text": record["task_text"],
             "preference": torch.tensor(record["preference"], dtype=torch.float32),
+            "targets": torch.tensor(
+                record.get("targets", [150.0, 0.50, 0.44]), dtype=torch.float32
+            ),
             "teacher_latent": torch.tensor(record["teacher_latent"], dtype=torch.float32),
+            "target_json": record.get("target_json", ""),
         }

@@ -14,6 +14,12 @@ TASK_TAGS = (
     "</OBJECTIVE_B>",
     "<PREFERENCE>",
     "</PREFERENCE>",
+    "<TARGET_ENERGY>",
+    "</TARGET_ENERGY>",
+    "<MIN_R5>",
+    "</MIN_R5>",
+    "<MIN_R6>",
+    "</MIN_R6>",
     "<DESIGN>",
     "</DESIGN>",
     "<U0>",
@@ -32,10 +38,19 @@ TASK_TAGS = (
 @dataclass(frozen=True)
 class StructuredPreferenceTask:
     preference: float
+    target_energy: float = 150.0
+    min_retention_5c: float = 0.50
+    min_retention_6c: float = 0.44
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.preference <= 1.0:
             raise ValueError("preference must be in [0, 1]")
+        if self.target_energy <= 0.0:
+            raise ValueError("target_energy must be positive")
+        if not 0.0 <= self.min_retention_5c <= 1.0:
+            raise ValueError("min_retention_5c must be in [0, 1]")
+        if not 0.0 <= self.min_retention_6c <= 1.0:
+            raise ValueError("min_retention_6c must be in [0, 1]")
 
 
 class GradCellLanguageCodec:
@@ -63,6 +78,9 @@ class GradCellLanguageCodec:
             "<TASK>\n"
             "<OBJECTIVE_A>ENERGY_1C</OBJECTIVE_A>\n"
             "<OBJECTIVE_B>MIN_RETENTION_5C_6C</OBJECTIVE_B>\n"
+            f"<TARGET_ENERGY>{task.target_energy:.4f}</TARGET_ENERGY>\n"
+            f"<MIN_R5>{task.min_retention_5c:.6f}</MIN_R5>\n"
+            f"<MIN_R6>{task.min_retention_6c:.6f}</MIN_R6>\n"
             f"<PREFERENCE><LEVEL_{level:03d}></PREFERENCE>\n"
             "</TASK>\n<DESIGN>"
         )
