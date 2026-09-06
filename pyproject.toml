@@ -16,6 +16,19 @@ dependencies = [
 
 [project.optional-dependencies]
 physics = ["pybamm>=25.0", "scipy>=1.10", "pandas>=2.0", "matplotlib>=3.7"]
+language = [
+  "transformers>=4.51",
+  "accelerate>=1.2",
+  "peft>=0.14",
+  "datasets>=3.2",
+]
+language-gpu = [
+  "transformers>=4.51",
+  "accelerate>=1.2",
+  "peft>=0.14",
+  "datasets>=3.2",
+  "bitsandbytes>=0.45",
+]
 dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.5"]
 
 [tool.setuptools.packages.find]
@@ -28,4 +41,3 @@ addopts = "-q"
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-

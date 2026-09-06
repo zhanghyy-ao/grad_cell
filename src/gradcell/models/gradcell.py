@@ -121,6 +121,17 @@ class GradCell(nn.Module):
     def forward(self, preference: torch.Tensor, num_steps: int = 0) -> GradCellOutput:
         task_embedding = self.task_encoder(preference)
         latent = self.initializer(task_embedding)
+        return self.run_from_embedding(task_embedding, latent, preference, num_steps=num_steps)
+
+    def run_from_embedding(
+        self,
+        task_embedding: torch.Tensor,
+        latent: torch.Tensor,
+        preference: torch.Tensor,
+        *,
+        num_steps: int = 0,
+    ) -> GradCellOutput:
+        """Evaluate and refine an externally encoded task and initial latent."""
         # During frozen-refiner training the initializer has no trainable parameters,
         # but the refiner still needs dL/du from the differentiable physics chain.
         if not latent.requires_grad:

@@ -1,5 +1,31 @@
 # GradCell：基于可微电池仿真的目标条件化电芯设计
 
+## GradCell-LM（实验性）
+
+仓库已加入以 `Qwen/Qwen3-8B` 为默认基座的结构化设计语言原型。第一阶段把现有
+GradCell K=0 checkpoint 蒸馏为 `<TASK>...<DESIGN>` 数据，冻结 Qwen，仅训练任务
+projector、连续 latent head 和 256 档 level head；连续 head 可在下一阶段直接接入现有
+硬可行解码器、SPMe sensitivity 与 learned refiner。
+
+```bash
+pip install -e ".[language,physics,dev]"
+PYTHONPATH=src python scripts/generate_language_design_data.py \
+  --checkpoint results/gradcell_exploration/k0_s7/model.pt \
+  --samples 4096 --output data/gradcell_lm/k0_distillation_s7.jsonl
+PYTHONPATH=src python scripts/train_language_distillation.py \
+  --data data/gradcell_lm/k0_distillation_s7.jsonl \
+  --output results/gradcell_lm/qwen3_8b_stage1.pt --load-in-4bit
+```
+
+NVIDIA GPU服务器可先运行 `bash scripts/setup_language_gpu.sh` 安装CUDA 12.4版PyTorch及
+QLoRA依赖，再运行 `bash scripts/run_qwen3_8b_gpu.sh`。8GB显存设备必须使用4-bit加载和
+batch size 1；更大显存服务器可以去掉 `--load-in-4bit` 使用BF16。需要微调Qwen时再增加
+`--use-lora`，不要在第一阶段全量训练8B参数。
+
+完整研究问题、数据拆分、基线、消融和验收判据见
+`docs/GradCell-LM_Qwen3-8B实验设计.md`。该路线目前是实验支线，不改变下述已验证的
+Fourier-MLP GradCell 主实验。
+
 GradCell 是一个面向电芯逆向设计的研究原型。当前主实验接收 1C 比能量与 5C/6C 高倍率能量保持率之间的连续性能偏好，先预测满足制造约束的电芯设计，再利用 PyBaMM 一阶物理敏感度改善设计。第二目标定义为 `min(E_5C/E_1C, E_6C/E_1C)`；参考 Pareto 前沿只使用同时满足 5C 和 6C 最低能量保持率约束的样本。旧的 3C 容量保持率因大部分样本落在平台区，已不再作为条件化训练目标。
 
 当前同时提供一条独立的电解液纯物理端到端路线：固定 Chen2020 电极与结构，网络由 CALiSol-23 配方特征直接预测有界 `log_conductivity_scale`，将其接入 PyBaMM DFN，并且只用 DFN 电压轨迹 loss 训练。Property Loss 已删除；实测电导率仅离线生成合成 DFN 目标并用于训练后诊断。DFN sensitivity 和自定义 `Jᵀv` 将电压梯度传回网络。详细流程见 `docs/第一版_固定材料电解液性质_DFN端到端实验流程.md`。

@@ -1,0 +1,28 @@
+language_model:
+  model_name: Qwen/Qwen3-8B
+  dtype: bfloat16
+  device_map: auto
+  freeze_backbone: true
+  load_in_4bit: true
+  use_lora: false
+  lora_rank: 16
+  lora_alpha: 32
+  task_embedding_dim: 128
+
+representation:
+  latent_bins: 256
+  latent_limit: 4.0
+  token_blend: 0.0
+
+training:
+  stage_1: structured_supervised_distillation
+  stage_2: physics_finetuning
+  stage_3: optional_lora_physics_finetuning
+  batch_size: 1
+  gradient_accumulation_steps: 16
+  learning_rate: 0.0001
+  physics_learning_rate: 0.00003
+  token_loss_weight: 1.0
+  latent_loss_weight: 1.0
+  token_continuous_alignment_weight: 0.1
+  physics_loss_weight: 0.1
