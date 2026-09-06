@@ -104,6 +104,7 @@ def main() -> None:
             return_tensors="pt",
         )
         labels = encoded.input_ids.clone()
+        labels[encoded.attention_mask == 0] = -100
         schema_labels = torch.full_like(labels, -100)
         for row, (prompt, target) in enumerate(zip(prompts, targets)):
             prompt_length = len(tokenizer(prompt, add_special_tokens=False).input_ids)
