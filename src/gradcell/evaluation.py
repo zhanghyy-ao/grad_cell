@@ -8,25 +8,37 @@ from gradcell.losses import SmoothTchebycheff
 from gradcell.physics import PyBaMMBackend
 
 
-def hard_cutoff_metrics(
-    latent: torch.Tensor,
+def hard_cutoff_metrics_from_physical_inputs(
+    base_inputs: np.ndarray,
+    stack_mass_kg: np.ndarray,
+    initial_capacity_ah: np.ndarray,
     model_name: str,
-    capacity_formula: str,
     time_points: int = 151,
     calibration_rate: float = 0.1,
     calibration_iterations: int = 2,
-    capacity_multiplier: float = 1.0,
+    parameter_set: str = "Chen2020",
 ) -> dict[str, np.ndarray]:
-    """Evaluate decoded designs with physical voltage cutoffs enabled."""
-    decoder = DesignSpace(
-        capacity_formula=capacity_formula,
-        capacity_multiplier=capacity_multiplier,
-    )
-    design = decoder(latent.detach().cpu())
-    base = design.physics_tensor(1.0).detach().numpy()
-    mass = design.stack_mass_kg.detach().numpy()
+    """Evaluate physical PyBaMM inputs with the project's hard-cutoff protocol.
+
+    This is the common evaluator for decoded GradCell designs and a parameter-set
+    baseline. The last input column is overwritten with the current appropriate
+    for calibration or the requested C-rate.
+    """
+    base = np.asarray(base_inputs, dtype=np.float64)
+    mass = np.asarray(stack_mass_kg, dtype=np.float64).reshape(-1)
+    reference_capacity = np.asarray(initial_capacity_ah, dtype=np.float64).reshape(-1).copy()
+    if base.ndim != 2 or base.shape[1] != len(PyBaMMBackend.input_names):
+        raise ValueError(
+            f"base_inputs must have shape (N, {len(PyBaMMBackend.input_names)})"
+        )
+    if len(base) != len(mass) or len(base) != len(reference_capacity):
+        raise ValueError("base_inputs, stack_mass_kg, and initial_capacity_ah must align")
+    if np.any(mass <= 0.0) or np.any(reference_capacity <= 0.0):
+        raise ValueError("Mass and initial capacity must be positive")
+
     calibration_backend = PyBaMMBackend(
         model_name=model_name,
+        parameter_set=parameter_set,
         horizon_s=1.5 * 3600.0 / calibration_rate,
         time_points=time_points,
         calculate_sensitivities=False,
@@ -36,6 +48,7 @@ def hard_cutoff_metrics(
     backends = {
         "1c": PyBaMMBackend(
             model_name=model_name,
+            parameter_set=parameter_set,
             horizon_s=1.5 * 3600.0,
             time_points=time_points,
             calculate_sensitivities=False,
@@ -44,6 +57,7 @@ def hard_cutoff_metrics(
         ),
         "5c": PyBaMMBackend(
             model_name=model_name,
+            parameter_set=parameter_set,
             horizon_s=1.5 * 720.0,
             time_points=time_points,
             calculate_sensitivities=False,
@@ -52,6 +66,7 @@ def hard_cutoff_metrics(
         ),
         "6c": PyBaMMBackend(
             model_name=model_name,
+            parameter_set=parameter_set,
             horizon_s=1.5 * 600.0,
             time_points=time_points,
             calculate_sensitivities=False,
@@ -59,7 +74,6 @@ def hard_cutoff_metrics(
             physical_voltage_cutoffs=True,
         ),
     }
-    reference_capacity = design.nominal_capacity_ah.detach().numpy().copy()
     calibration = None
     for _ in range(calibration_iterations):
         calibration_inputs = base.copy()
@@ -86,8 +100,10 @@ def hard_cutoff_metrics(
         & calibration_cutoff
         & (result_1c.status == 1)
         & cutoffs["1c"]
-        & (result_5c.status == 1) & cutoffs["5c"]
-        & (result_6c.status == 1) & cutoffs["6c"]
+        & (result_5c.status == 1)
+        & cutoffs["5c"]
+        & (result_6c.status == 1)
+        & cutoffs["6c"]
     )
     energy_1c = np.maximum(result_1c.delivered_energy_wh, 1e-12)
     return {
@@ -103,6 +119,34 @@ def hard_cutoff_metrics(
         "time_5c_s": result_5c.discharge_time_s,
         "time_6c_s": result_6c.discharge_time_s,
     }
+
+
+def hard_cutoff_metrics(
+    latent: torch.Tensor,
+    model_name: str,
+    capacity_formula: str,
+    time_points: int = 151,
+    calibration_rate: float = 0.1,
+    calibration_iterations: int = 2,
+    capacity_multiplier: float = 1.0,
+    parameter_set: str = "Chen2020",
+) -> dict[str, np.ndarray]:
+    """Evaluate decoded designs with physical voltage cutoffs enabled."""
+    decoder = DesignSpace(
+        capacity_formula=capacity_formula,
+        capacity_multiplier=capacity_multiplier,
+    )
+    design = decoder(latent.detach().cpu())
+    return hard_cutoff_metrics_from_physical_inputs(
+        design.physics_tensor(1.0).detach().numpy(),
+        design.stack_mass_kg.detach().numpy(),
+        design.nominal_capacity_ah.detach().numpy(),
+        model_name,
+        time_points,
+        calibration_rate,
+        calibration_iterations,
+        parameter_set,
+    )
 
 
 def scalarized_loss(

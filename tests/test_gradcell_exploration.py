@@ -7,7 +7,8 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-from gradcell.evaluation import scalarized_loss
+from gradcell.benchmark import nominal_design_from_parameter_values
+from gradcell.evaluation import hard_cutoff_metrics_from_physical_inputs, scalarized_loss
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -185,3 +186,34 @@ def test_k0_physics_refinement_rejects_mismatched_front() -> None:
         assert "does not match" in str(exc)
     else:
         raise AssertionError("mismatched reference model should be rejected")
+
+
+def test_physical_nominal_design_uses_parameter_set_values_without_latent() -> None:
+    values = {
+        "Positive electrode porosity": 0.335,
+        "Negative electrode porosity": 0.25,
+        "Separator porosity": 0.47,
+        "Positive electrode active material volume fraction": 0.665,
+        "Negative electrode active material volume fraction": 0.75,
+        "Nominal cell capacity [A.h]": 5.0,
+    }
+    design = nominal_design_from_parameter_values(values)
+    assert design.physics_inputs.shape == (1, 8)
+    assert np.allclose(design.physics_inputs[0, :5], [0.335, 0.25, 0.47, 0.665, 0.75])
+    assert np.allclose(design.physics_inputs[0, 5:7], 1.0)
+    assert design.initial_capacity_ah.tolist() == [5.0]
+    assert design.stack_mass_kg[0] > 0.0
+
+
+def test_physical_hard_cutoff_evaluator_rejects_misaligned_inputs() -> None:
+    try:
+        hard_cutoff_metrics_from_physical_inputs(
+            np.zeros((2, 7)),
+            np.ones(2),
+            np.ones(2),
+            "SPMe",
+        )
+    except ValueError as exc:
+        assert "shape" in str(exc)
+    else:
+        raise AssertionError("invalid physical input shape should be rejected")
