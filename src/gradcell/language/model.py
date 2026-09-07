@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from typing import Protocol
 
 import torch
@@ -88,6 +88,20 @@ class QwenBackbone(nn.Module):
                 target_modules=("q_proj", "k_proj", "v_proj", "o_proj"),
             )
             self.model = get_peft_model(self.model, config)
+        if use_lora:
+            # Causal-LM activations dominate memory for an 8B model.  This is
+            # needed for BF16 LoRA as well as QLoRA; the k-bit helper only
+            # enables it automatically in the quantized branch.
+            self.model.config.use_cache = False
+            if hasattr(self.model, "enable_input_require_grads"):
+                self.model.enable_input_require_grads()
+            if hasattr(self.model, "gradient_checkpointing_enable"):
+                try:
+                    self.model.gradient_checkpointing_enable(
+                        gradient_checkpointing_kwargs={"use_reentrant": False}
+                    )
+                except TypeError:
+                    self.model.gradient_checkpointing_enable()
         self.hidden_size = int(self.model.config.hidden_size)
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
@@ -166,22 +180,41 @@ class LanguageGradCell(nn.Module):
     def encode(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         hidden = self.backbone(input_ids, attention_mask)
         pooled = self._pool_last(hidden, attention_mask)
+        return self.project_hidden(pooled)
+
+    def project_hidden(self, pooled: torch.Tensor) -> torch.Tensor:
+        """Project one selected Qwen hidden state into the GradCell task space."""
         target_dtype = self.projector[0].weight.dtype
         return self.projector(pooled.to(dtype=target_dtype))
 
-    def propose(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor
+    def propose_from_hidden_positions(
+        self, hidden: torch.Tensor, positions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        task_embedding = self.encode(input_ids, attention_mask)
+        """Build a proposal from selected sequence positions without another Qwen pass."""
+        batch = torch.arange(hidden.shape[0], device=hidden.device)
+        task_embedding = self.project_hidden(hidden[batch, positions.to(hidden.device)])
+        return self.propose_from_embedding(task_embedding)
+
+    def propose_from_embedding(
+        self, task_embedding: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Decode a task embedding into continuous and discretized design latents."""
+        batch_size = task_embedding.shape[0]
         continuous = 4.0 * torch.tanh(self.continuous_head(task_embedding))
         logits = self.level_head(task_embedding).reshape(
-            input_ids.shape[0], self.gradcell.design_space.latent_dim, self.codec.bins
+            batch_size, self.gradcell.design_space.latent_dim, self.codec.bins
         )
         levels = torch.arange(self.codec.bins, dtype=logits.dtype, device=logits.device)
         expected_levels = (torch.softmax(logits, dim=-1) * levels).sum(dim=-1)
         token_latent = self.codec.dequantize(expected_levels, dtype=continuous.dtype)
         latent = (1.0 - self.token_blend) * continuous + self.token_blend * token_latent
         return task_embedding, latent, logits
+
+    def propose(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        task_embedding = self.encode(input_ids, attention_mask)
+        return self.propose_from_embedding(task_embedding)
 
     def forward(
         self,

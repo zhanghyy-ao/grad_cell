@@ -104,6 +104,7 @@ bash scripts/setup_language_gpu.sh
 export PYTHONPATH="$PWD/src"
 export CUDA_VISIBLE_DEVICES=0
 export TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 python - <<'PY'
 import torch
@@ -114,6 +115,14 @@ print("bf16:", torch.cuda.is_bf16_supported())
 assert torch.cuda.is_available()
 assert torch.cuda.is_bf16_supported()
 PY
+```
+
+若要使用服务器上的第三张物理GPU，将可见卡改为索引`2`。进程内它仍显示为`cuda:0`，这是CUDA的正常重编号行为：
+
+```bash
+export CUDA_VISIBLE_DEVICES=2
+nvidia-smi -i 2
+python -c 'import torch; print(torch.cuda.get_device_name(0)); print(torch.cuda.mem_get_info())'
 ```
 
 确认K=0 checkpoint和参考前沿存在：
@@ -137,14 +146,14 @@ wc -l data/gradcell_lm/k0_distillation_s7.jsonl
 head -n 1 data/gradcell_lm/k0_distillation_s7.jsonl
 ```
 
-后台启动S1。A100 40GB建议`batch-size=2`、梯度累积8次，不使用4-bit：
+后台启动S1。A100 40GB先使用稳妥配置`batch-size=1`、梯度累积16次，不使用4-bit。当前实现已启用梯度检查点，并复用语言模型单次前向的输入末端隐藏状态计算设计头损失：
 
 ```bash
 nohup python scripts/train_language_stage1_semantic.py \
   --data data/gradcell_lm/k0_distillation_s7.jsonl \
   --output-dir results/gradcell_lm/stage1_s7 \
   --model-name Qwen/Qwen3-8B \
-  --epochs 3 --batch-size 2 --gradient-accumulation 8 \
+  --epochs 3 --batch-size 1 --gradient-accumulation 16 \
   --learning-rate 1e-4 --max-length 512 --bins 256 \
   --lora-rank 16 --lora-alpha 32 \
   --schema-penalty-weight 2.0 \
@@ -160,6 +169,37 @@ tail -f results/gradcell_lm/logs/stage1_s7.log
 
 ```bash
 watch -n 2 nvidia-smi
+```
+
+若训练前显存不是接近空闲，先定位占用者：
+
+```bash
+nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+ps -fp <PID>
+```
+
+只有确认PID属于自己且是已失效的旧训练任务时，才终止它：
+
+```bash
+kill <PID>
+# 等待并再次检查；只有进程无法正常退出时才使用：
+kill -9 <PID>
+```
+
+报错中若只剩几十MiB显存，`expandable_segments`不能代替释放占用显存的进程。若A100必须与其他任务共享，可改用4-bit加载以进一步降低模型权重和优化器占用：
+
+```bash
+nohup python scripts/train_language_stage1_semantic.py \
+  --data data/gradcell_lm/k0_distillation_s7.jsonl \
+  --output-dir results/gradcell_lm/stage1_s7_qlora \
+  --model-name Qwen/Qwen3-8B --load-in-4bit \
+  --epochs 3 --batch-size 1 --gradient-accumulation 16 \
+  --learning-rate 1e-4 --max-length 512 --bins 256 \
+  --lora-rank 16 --lora-alpha 32 \
+  --schema-penalty-weight 2.0 \
+  --latent-weight 1.0 --level-weight 0.25 \
+  --feasibility-penalty-weight 10.0 --seed 7 \
+  > results/gradcell_lm/logs/stage1_s7_qlora.log 2>&1 &
 ```
 
 S1结束后检查产物：

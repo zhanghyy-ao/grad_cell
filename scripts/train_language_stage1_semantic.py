@@ -75,6 +75,8 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
+    # prompt_positions below assumes examples begin at column zero.
+    tokenizer.padding_side = "right"
     backbone = QwenBackbone(
         args.model_name,
         load_in_4bit=args.load_in_4bit,
@@ -101,13 +103,21 @@ def main() -> None:
             padding=True,
             truncation=True,
             max_length=args.max_length,
+            add_special_tokens=False,
             return_tensors="pt",
         )
         labels = encoded.input_ids.clone()
         labels[encoded.attention_mask == 0] = -100
         schema_labels = torch.full_like(labels, -100)
+        prompt_positions = []
         for row, (prompt, target) in enumerate(zip(prompts, targets)):
             prompt_length = len(tokenizer(prompt, add_special_tokens=False).input_ids)
+            if prompt_length >= args.max_length:
+                raise ValueError(
+                    f"Prompt token length {prompt_length} must be smaller than "
+                    f"--max-length={args.max_length} so the target JSON is not removed"
+                )
+            prompt_positions.append(prompt_length - 1)
             labels[row, :prompt_length] = -100
             target_ids = tokenizer(target, add_special_tokens=False).input_ids
             for offset, token_id in enumerate(target_ids):
@@ -124,6 +134,7 @@ def main() -> None:
             padding=True,
             truncation=True,
             max_length=args.max_length,
+            add_special_tokens=False,
             return_tensors="pt",
         )
         return {
@@ -131,6 +142,9 @@ def main() -> None:
             "attention_mask": encoded.attention_mask.to(device),
             "labels": labels.to(device),
             "schema_labels": schema_labels.to(device),
+            "prompt_positions": torch.tensor(
+                prompt_positions, dtype=torch.long, device=device
+            ),
             "prompt_ids": prompt_batch.input_ids.to(device),
             "prompt_mask": prompt_batch.attention_mask.to(device),
             "teacher_latent": torch.stack([record["teacher_latent"] for record in records]).to(device),
@@ -152,9 +166,15 @@ def main() -> None:
                 input_ids=batch["input_ids"],
                 attention_mask=batch["attention_mask"],
                 labels=batch["labels"],
+                output_hidden_states=True,
             )
             schema_penalty = shifted_cross_entropy(causal.logits, batch["schema_labels"])
-            _, latent, level_logits = model.propose(batch["prompt_ids"], batch["prompt_mask"])
+            # The hidden state at the last prompt token cannot attend to target
+            # JSON tokens under causal masking. Reusing it avoids a second 8B
+            # forward pass without leaking the training answer into the heads.
+            _, latent, level_logits = model.propose_from_hidden_positions(
+                causal.hidden_states[-1], batch["prompt_positions"]
+            )
             teacher = batch["teacher_latent"].to(dtype=latent.dtype)
             latent_loss = F.mse_loss(latent, teacher)
             level_loss = F.cross_entropy(
