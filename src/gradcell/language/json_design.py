@@ -71,10 +71,14 @@ class MaterialDesignJSONCodec:
     @staticmethod
     def extract_json(text: str) -> str:
         start = text.find("{")
-        end = text.rfind("}")
-        if start < 0 or end < start:
+        if start < 0:
             raise ValueError("model output does not contain a JSON object")
-        return text[start : end + 1]
+        candidate = text[start:]
+        try:
+            _, end = json.JSONDecoder().raw_decode(candidate)
+        except json.JSONDecodeError as exc:
+            raise ValueError("model output does not contain a complete JSON object") from exc
+        return candidate[:end]
 
     def loads(self, text: str) -> ParsedMaterialDesign:
         payload = json.loads(self.extract_json(text))

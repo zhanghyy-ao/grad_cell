@@ -96,7 +96,13 @@ def main() -> None:
 
     def collate(records: list[dict]) -> dict:
         prompts = [record["task_text"] + "\n" for record in records]
-        targets = [record["target_json"] + tokenizer.eos_token for record in records]
+        # The prompt opens <DESIGN>. Teach one canonical JSON object, an
+        # explicit closing boundary, and finally EOS so generation terminates
+        # instead of copying the object repeatedly.
+        targets = [
+            record["target_json"] + "\n</DESIGN>" + tokenizer.eos_token
+            for record in records
+        ]
         combined = [prompt + target for prompt, target in zip(prompts, targets)]
         encoded = tokenizer(
             combined,
@@ -201,6 +207,7 @@ def main() -> None:
         validation_latent = []
         valid_json = 0
         generated_json = 0
+        stopped_design = 0
         json_codec = MaterialDesignJSONCodec(gradcell.design_space)
         with torch.no_grad():
             for batch in validation_loader:
@@ -218,8 +225,12 @@ def main() -> None:
                 prompt_width = batch["prompt_ids"].shape[1]
                 for row in generated[:, prompt_width:]:
                     generated_json += 1
+                    generated_text = tokenizer.decode(row, skip_special_tokens=True)
+                    if "</DESIGN>" in generated_text:
+                        stopped_design += 1
+                        generated_text = generated_text.split("</DESIGN>", 1)[0]
                     try:
-                        json_codec.loads(tokenizer.decode(row, skip_special_tokens=True))
+                        json_codec.loads(generated_text)
                     except (ValueError, json.JSONDecodeError):
                         continue
                     valid_json += 1
@@ -228,6 +239,7 @@ def main() -> None:
             "train_total_loss": sum(totals) / len(totals),
             "validation_latent_mse": sum(validation_latent) / len(validation_latent),
             "validation_valid_json_rate": valid_json / max(generated_json, 1),
+            "validation_design_stop_rate": stopped_design / max(generated_json, 1),
         }
         history.append(record)
         print(json.dumps(record))

@@ -51,10 +51,15 @@ JSON。本阶段不调用 PyBaMM，避免昂贵物理求解干扰基础语法与
 以及由decoder强制执行的制造/容量平衡约束。当前温度和材料体系明确标为固定上下文；模型
 不会把尚未接入PyBaMM的条件伪装成可优化变量。
 
-监督输出是严格 JSON：
+监督输出是严格 JSON，并紧跟显式设计结束标签和Qwen EOS token。完整监督序列为
+`JSON + \n</DESIGN> + EOS`，避免模型在生成一个对象后继续重复：
 
 ```json
 {"schema":"gradcell.material_design.v1","design":{"positive_electrode_porosity":0.30,"negative_electrode_porosity":0.31,"separator_porosity":0.45,"positive_active_material_fraction":0.57,"negative_to_positive_capacity_ratio":1.10}}
+```
+
+```text
+</DESIGN><EOS>
 ```
 
 训练标签由现有 K=0 checkpoint 生成。`target_json`、teacher latent 和量化 level 同时保存，
@@ -214,6 +219,7 @@ cat results/gradcell_lm/stage1_s7/metrics.json
 ## 验收
 
 - validation JSON严格解析率为100%；
+- `validation_design_stop_rate`为100%，即生成显式`</DESIGN>`后结束；
 - schema和字段顺序正确率为100%；
 - JSON物理边界与耦合约束通过率为100%；
 - held-out preference 的连续latent MSE显著优于常数设计。
