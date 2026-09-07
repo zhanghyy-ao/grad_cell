@@ -216,6 +216,16 @@ test -f results/gradcell_lm/stage1_s7/metrics.json
 cat results/gradcell_lm/stage1_s7/metrics.json
 ```
 
+可以对已有S1权重单独复验，无需重新训练。验证脚本逐条去除右侧padding后再生成，并输出前三个失败样本及失败类型：
+
+```bash
+python scripts/validate_language_stage1_json.py \
+  --data data/gradcell_lm/k0_distillation_s7.jsonl \
+  --stage1-dir results/gradcell_lm/stage1_s7_v2 \
+  --model-name "$PWD/models/Qwen3-8B" \
+  --max-samples 50 --max-new-tokens 256 --seed 7
+```
+
 ## 验收
 
 - validation JSON严格解析率为100%；

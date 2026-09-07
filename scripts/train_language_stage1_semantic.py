@@ -215,15 +215,21 @@ def main() -> None:
                 validation_latent.append(
                     float(F.mse_loss(latent, batch["teacher_latent"].to(latent.dtype)))
                 )
-                generated = backbone.generate(
-                    input_ids=batch["prompt_ids"],
-                    attention_mask=batch["prompt_mask"],
-                    max_new_tokens=160,
-                    do_sample=False,
-                    pad_token_id=tokenizer.pad_token_id,
-                )
-                prompt_width = batch["prompt_ids"].shape[1]
-                for row in generated[:, prompt_width:]:
+                # Decoder-only generation must not continue from a right-side
+                # PAD column. Strip each prompt to its real length first.
+                for index in range(batch["prompt_ids"].shape[0]):
+                    prompt_width = int(batch["prompt_mask"][index].sum())
+                    prompt_ids = batch["prompt_ids"][index : index + 1, :prompt_width]
+                    prompt_mask = batch["prompt_mask"][index : index + 1, :prompt_width]
+                    generated = backbone.generate(
+                        input_ids=prompt_ids,
+                        attention_mask=prompt_mask,
+                        max_new_tokens=256,
+                        do_sample=False,
+                        pad_token_id=tokenizer.pad_token_id,
+                        eos_token_id=tokenizer.eos_token_id,
+                    )
+                    row = generated[0, prompt_width:]
                     generated_json += 1
                     generated_text = tokenizer.decode(row, skip_special_tokens=True)
                     if "</DESIGN>" in generated_text:
