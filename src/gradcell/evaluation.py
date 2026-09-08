@@ -17,6 +17,8 @@ def hard_cutoff_metrics_from_physical_inputs(
     calibration_rate: float = 0.1,
     calibration_iterations: int = 2,
     parameter_set: str = "Chen2020",
+    rtol: float = 1e-6,
+    atol: float = 1e-8,
 ) -> dict[str, np.ndarray]:
     """Evaluate physical PyBaMM inputs with the project's hard-cutoff protocol.
 
@@ -44,6 +46,8 @@ def hard_cutoff_metrics_from_physical_inputs(
         calculate_sensitivities=False,
         current_ramp_time_s=0.0,
         physical_voltage_cutoffs=True,
+        rtol=rtol,
+        atol=atol,
     )
     backends = {
         "1c": PyBaMMBackend(
@@ -54,6 +58,8 @@ def hard_cutoff_metrics_from_physical_inputs(
             calculate_sensitivities=False,
             current_ramp_time_s=0.0,
             physical_voltage_cutoffs=True,
+            rtol=rtol,
+            atol=atol,
         ),
         "5c": PyBaMMBackend(
             model_name=model_name,
@@ -63,6 +69,8 @@ def hard_cutoff_metrics_from_physical_inputs(
             calculate_sensitivities=False,
             current_ramp_time_s=0.0,
             physical_voltage_cutoffs=True,
+            rtol=rtol,
+            atol=atol,
         ),
         "6c": PyBaMMBackend(
             model_name=model_name,
@@ -72,6 +80,8 @@ def hard_cutoff_metrics_from_physical_inputs(
             calculate_sensitivities=False,
             current_ramp_time_s=0.0,
             physical_voltage_cutoffs=True,
+            rtol=rtol,
+            atol=atol,
         ),
     }
     calibration = None
@@ -130,6 +140,8 @@ def hard_cutoff_metrics(
     calibration_iterations: int = 2,
     capacity_multiplier: float = 1.0,
     parameter_set: str = "Chen2020",
+    rtol: float = 1e-6,
+    atol: float = 1e-8,
 ) -> dict[str, np.ndarray]:
     """Evaluate decoded designs with physical voltage cutoffs enabled."""
     decoder = DesignSpace(
@@ -146,6 +158,8 @@ def hard_cutoff_metrics(
         calibration_rate,
         calibration_iterations,
         parameter_set,
+        rtol,
+        atol,
     )
 
 

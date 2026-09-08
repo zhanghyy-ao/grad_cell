@@ -98,7 +98,9 @@ def main() -> None:
     )
     parser.add_argument("--samples", type=int, default=2000)
     parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--sampler", choices=("gaussian", "sobol"), default="gaussian")
     parser.add_argument("--latent-std", type=float, default=1.25)
+    parser.add_argument("--latent-limit", type=float, default=4.0)
     parser.add_argument("--time-points", type=int, default=151)
     parser.add_argument(
         "--current-ramp-time-s",
@@ -138,6 +140,8 @@ def main() -> None:
         parser.error("--capacity-calibration-iterations must be at least 1")
     if args.maximum_duration_factor <= 1.0:
         parser.error("--maximum-duration-factor must be greater than 1")
+    if args.latent_limit <= 0.0:
+        parser.error("--latent-limit must be positive")
 
     with ExperimentRun("generate_supervised_data", args, run_dir=args.run_dir) as run:
         torch.set_default_dtype(torch.float64)
@@ -206,7 +210,21 @@ def main() -> None:
             )
             backend_5c = make_backend(args.backend, args.model, 720.0, args.time_points, args.current_ramp_time_s)
             backend_6c = make_backend(args.backend, args.model, 600.0, args.time_points, args.current_ramp_time_s)
-        latent = args.latent_std * torch.randn(args.samples, decoder.latent_dim)
+        if args.sampler == "sobol":
+            try:
+                from scipy.stats import qmc
+            except ImportError as exc:
+                raise ImportError("Sobol sampling requires scipy") from exc
+            sampler = qmc.Sobol(d=decoder.latent_dim, scramble=True, seed=args.seed)
+            exponent = int(np.log2(args.samples))
+            unit = (
+                sampler.random_base2(exponent)
+                if 2**exponent == args.samples
+                else sampler.random(args.samples)
+            )
+            latent = torch.from_numpy((2.0 * unit - 1.0) * args.latent_limit).double()
+        else:
+            latent = args.latent_std * torch.randn(args.samples, decoder.latent_dim)
         saved_latent, saved_design, saved_targets = [], [], []
         failed_indices: list[int] = []
         failed_diagnostics: list[dict] = []
@@ -422,6 +440,8 @@ def main() -> None:
             "failed_diagnostics": failed_diagnostics,
             "failure_rate": len(failed_indices) / args.samples,
             "latent_std": args.latent_std,
+            "latent_limit": args.latent_limit,
+            "sampler": args.sampler,
             "time_points": args.time_points,
             "design_fields": design_fields,
             "target_fields": target_fields,
