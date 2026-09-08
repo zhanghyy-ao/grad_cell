@@ -66,8 +66,15 @@ JSON。本阶段不调用 PyBaMM，避免昂贵物理求解干扰基础语法与
 
 训练标签由现有 K=0 checkpoint 生成。`target_json`、teacher latent 和量化 level 同时保存，
 从而让自回归输出与后续连续物理通道对齐。
-数据生成器会检查每条JSONL记录；只要记录中出现内部缩写或运行期指标字段，就立即终止，
-防止这些词进入阶段一训练语料。该约束由数据生成完成，不向loss添加负面字段惩罚。
+对于已有JSONL，使用独立清洗脚本生成新的训练文件。原文件不会被覆盖；清洗后的
+`target_json.design`只保留五个设计维度，旧字段`np_ratio`的数值迁移到完整规范字段名，
+`physics_loss`、`derived`、`metadata`等内容全部丢弃。loss不增加负面字段惩罚。
+
+```bash
+python scripts/clean_language_design_data.py \
+  --input data/gradcell_lm/k0_distillation_s7.jsonl \
+  --output data/gradcell_lm/k0_distillation_five_latents_s7.jsonl
+```
 
 ## 模型与损失
 
