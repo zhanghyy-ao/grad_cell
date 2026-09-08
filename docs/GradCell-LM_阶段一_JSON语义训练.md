@@ -41,6 +41,9 @@ JSON。本阶段不调用 PyBaMM，避免昂贵物理求解干扰基础语法与
 </DESIGN_CONSTRAINTS>
 <OUTPUT_CONTRACT>
 <OUTPUT_SCHEMA>gradcell.material_design.v1</OUTPUT_SCHEMA>
+<REQUIRED_DESIGN_FIELDS>positive_electrode_porosity,negative_electrode_porosity,separator_porosity,positive_active_material_fraction,negative_to_positive_capacity_ratio</REQUIRED_DESIGN_FIELDS>
+<FORBIDDEN_OUTPUT_FIELDS>np_ratio,positive_active_fraction,negative_active_fraction,positive_electrode_active_fraction,negative_electrode_active_fraction,physics_loss,validation_loss</FORBIDDEN_OUTPUT_FIELDS>
+<OUTPUT_JSON_TEMPLATE>{"schema":"gradcell.material_design.v1","material_parameter_set":"Chen2020","fixed_material_properties":true,"design":{"positive_electrode_porosity":FLOAT,"negative_electrode_porosity":FLOAT,"separator_porosity":FLOAT,"positive_active_material_fraction":FLOAT,"negative_to_positive_capacity_ratio":FLOAT},"derived":{"negative_active_material_fraction":FLOAT,"nominal_capacity_ah":FLOAT,"stack_mass_kg":FLOAT}}</OUTPUT_JSON_TEMPLATE>
 <SELECTION_POLICY>MINIMUM_PHYSICS_LOSS</SELECTION_POLICY>
 </OUTPUT_CONTRACT>
 </TASK>
@@ -77,10 +80,14 @@ L1 = L_causal_json
    + 10.0 L_feasibility
 ```
 
-`L_schema` 对 JSON 括号、引号、键名、冒号和逗号对应 token 额外加权；`L_latent` 和
+输入契约显式列出五个必需设计字段、禁止使用的内部别名，并给出完整JSON骨架。`L_schema`
+对 JSON 括号、引号、键名、冒号和逗号对应 token 额外加权；`L_latent` 和
 `L_level` 使同一隐藏状态能够恢复教师设计；`L_feasibility` 检查孔隙率、活性相、N/P 和
 容量平衡约束。最终部署还会把物理解码后的设计重新序列化，所以不会把非法自由文本当作
 正式设计。
+
+LoRA覆盖注意力的`q/k/v/o_proj`以及MLP的`gate/up/down_proj`，避免模型只学会任务语义，
+却无法稳定记住较长的固定字段序列。
 
 ## 命令
 
@@ -159,7 +166,7 @@ nohup python scripts/train_language_stage1_semantic.py \
   --output-dir results/gradcell_lm/stage1_s7 \
   --model-name Qwen/Qwen3-8B \
   --epochs 3 --batch-size 1 --gradient-accumulation 16 \
-  --learning-rate 1e-4 --max-length 512 --bins 256 \
+  --learning-rate 1e-4 --max-length 1024 --bins 256 \
   --lora-rank 16 --lora-alpha 32 \
   --schema-penalty-weight 2.0 \
   --latent-weight 1.0 --level-weight 0.25 \
@@ -199,7 +206,7 @@ nohup python scripts/train_language_stage1_semantic.py \
   --output-dir results/gradcell_lm/stage1_s7_qlora \
   --model-name Qwen/Qwen3-8B --load-in-4bit \
   --epochs 3 --batch-size 1 --gradient-accumulation 16 \
-  --learning-rate 1e-4 --max-length 512 --bins 256 \
+  --learning-rate 1e-4 --max-length 1024 --bins 256 \
   --lora-rank 16 --lora-alpha 32 \
   --schema-penalty-weight 2.0 \
   --latent-weight 1.0 --level-weight 0.25 \

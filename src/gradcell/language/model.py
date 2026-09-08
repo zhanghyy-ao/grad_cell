@@ -85,7 +85,15 @@ class QwenBackbone(nn.Module):
                 lora_dropout=0.05,
                 bias="none",
                 task_type="CAUSAL_LM",
-                target_modules=("q_proj", "k_proj", "v_proj", "o_proj"),
+                target_modules=(
+                    "q_proj",
+                    "k_proj",
+                    "v_proj",
+                    "o_proj",
+                    "gate_proj",
+                    "up_proj",
+                    "down_proj",
+                ),
             )
             self.model = get_peft_model(self.model, config)
         if use_lora:

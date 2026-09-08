@@ -58,6 +58,12 @@ TASK_TAGS = (
     "</OUTPUT_CONTRACT>",
     "<OUTPUT_SCHEMA>",
     "</OUTPUT_SCHEMA>",
+    "<REQUIRED_DESIGN_FIELDS>",
+    "</REQUIRED_DESIGN_FIELDS>",
+    "<FORBIDDEN_OUTPUT_FIELDS>",
+    "</FORBIDDEN_OUTPUT_FIELDS>",
+    "<OUTPUT_JSON_TEMPLATE>",
+    "</OUTPUT_JSON_TEMPLATE>",
     "<SELECTION_POLICY>",
     "</SELECTION_POLICY>",
     "<DESIGN>",
@@ -156,6 +162,21 @@ class GradCellLanguageCodec:
             "</DESIGN_CONSTRAINTS>\n"
             "<OUTPUT_CONTRACT>\n"
             "<OUTPUT_SCHEMA>gradcell.material_design.v1</OUTPUT_SCHEMA>\n"
+            "<REQUIRED_DESIGN_FIELDS>positive_electrode_porosity,negative_electrode_porosity,"
+            "separator_porosity,positive_active_material_fraction,"
+            "negative_to_positive_capacity_ratio</REQUIRED_DESIGN_FIELDS>\n"
+            "<FORBIDDEN_OUTPUT_FIELDS>np_ratio,positive_active_fraction,negative_active_fraction,"
+            "positive_electrode_active_fraction,negative_electrode_active_fraction,physics_loss,"
+            "validation_loss</FORBIDDEN_OUTPUT_FIELDS>\n"
+            "<OUTPUT_JSON_TEMPLATE>{\"schema\":\"gradcell.material_design.v1\","
+            "\"material_parameter_set\":\"Chen2020\",\"fixed_material_properties\":true,"
+            "\"design\":{\"positive_electrode_porosity\":FLOAT,"
+            "\"negative_electrode_porosity\":FLOAT,\"separator_porosity\":FLOAT,"
+            "\"positive_active_material_fraction\":FLOAT,"
+            "\"negative_to_positive_capacity_ratio\":FLOAT},"
+            "\"derived\":{\"negative_active_material_fraction\":FLOAT,"
+            "\"nominal_capacity_ah\":FLOAT,\"stack_mass_kg\":FLOAT}}"
+            "</OUTPUT_JSON_TEMPLATE>\n"
             "<SELECTION_POLICY>MINIMUM_PHYSICS_LOSS</SELECTION_POLICY>\n"
             "</OUTPUT_CONTRACT>\n"
             "</TASK>\n<DESIGN>"

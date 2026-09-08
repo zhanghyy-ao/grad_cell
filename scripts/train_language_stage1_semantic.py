@@ -46,7 +46,7 @@ def main() -> None:
     parser.add_argument("--gradient-accumulation", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--bins", type=int, default=256)
-    parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument("--max-length", type=int, default=1024)
     parser.add_argument("--schema-penalty-weight", type=float, default=2.0)
     parser.add_argument("--latent-weight", type=float, default=1.0)
     parser.add_argument("--level-weight", type=float, default=0.25)
@@ -118,10 +118,14 @@ def main() -> None:
         prompt_positions = []
         for row, (prompt, target) in enumerate(zip(prompts, targets)):
             prompt_length = len(tokenizer(prompt, add_special_tokens=False).input_ids)
-            if prompt_length >= args.max_length:
+            full_length = len(
+                tokenizer(prompt + target, add_special_tokens=False).input_ids
+            )
+            if full_length > args.max_length:
                 raise ValueError(
-                    f"Prompt token length {prompt_length} must be smaller than "
-                    f"--max-length={args.max_length} so the target JSON is not removed"
+                    f"Combined sequence token length {full_length} exceeds "
+                    f"--max-length={args.max_length}; increase --max-length so the "
+                    "canonical target JSON, </DESIGN>, and EOS are all supervised"
                 )
             prompt_positions.append(prompt_length - 1)
             labels[row, :prompt_length] = -100
