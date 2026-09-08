@@ -16,6 +16,9 @@ GradCell-LM 在原有 GradCell 数值优化器上增加了语言模型入口。�
 | S2 | 生成满足需求的 K=0 初始设计 | projector、continuous head | SPMe 1C/5C/6C |
 | S3 | K=3 迭代并选择最佳设计 | physics refiner | 每个任务 K+1 轮 |
 
+> 📌 上表描述当前已实现代码。下一版 S2 将把 K=0 从外部 `continuous_head` 迁移到 Qwen
+> 五个 level-token logits，并用 PyBaMM 梯度训练 LoRA；下文单独记录目标架构与实现差异。
+
 当前材料参数集固定为 `Chen2020`，温度固定为 `298.15 K`。因此本版本优化的是电芯结构，
 不是正负极化学体系或电解液组成。最终 JSON 显式携带这一边界。
 
@@ -282,6 +285,33 @@ L_{constraint}=\operatorname{ReLU}(E^*-E)/160
 
 满足最低要求后，模型仍按照 `preference` 优化比能量或倍率余量，避免所有 hinge 项归零后
 失去梯度。S2 的 `refinement_steps=0`，因此输出即语言模型的一次 K=0 设计。
+
+### 下一版：LLM 内嵌 K=0
+
+目标实现不再把 Qwen 仅作为冻结编码器。Qwen 自回归输出固定的五个 level token；训练时
+从每个位置的 256 档 logits 计算 softmax 期望 latent，经过 `DesignSpace` 和 PyBaMM 后，
+物理 loss 反向更新 LoRA。推理阶段才执行 `argmax`，并由确定性序列化器生成最终 JSON。
+
+| 项目 | 当前实现 | 目标实现 |
+| --- | --- | --- |
+| K=0 来源 | `continuous_head` | Qwen 五个 level logits |
+| Qwen 基座 | 冻结 | 冻结 |
+| 阶段一 LoRA | 冻结 | 训练 |
+| `projector` | 训练 | 停用 |
+| `continuous_head` | 训练 | 停用 |
+| 物理梯度终点 | 外部 head | Qwen LoRA |
+| JSON | 连续设计后序列化 | level latent 解码后序列化 |
+
+目标损失为：
+
+```text
+L_stage2 = λ_token × L_level_CE
+         + λ_physics × L_K0_physics
+         + λ_entropy × L_level_entropy
+```
+
+该设计保留 token 监督，避免只用物理标量更新 LoRA 时破坏五维输出格式。实现完成前，现有
+`train_language_stage2_k0_physics.py` 仍属于 legacy 外部 head 路径。
 
 ## 🔄 阶段三：K=3 迭代训练
 
