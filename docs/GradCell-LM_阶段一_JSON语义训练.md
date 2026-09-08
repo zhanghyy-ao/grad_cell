@@ -35,14 +35,13 @@ JSON。本阶段不调用 PyBaMM，避免昂贵物理求解干扰基础语法与
 <POSITIVE_POROSITY_RANGE>0.20,0.42</POSITIVE_POROSITY_RANGE>
 <NEGATIVE_POROSITY_RANGE>0.20,0.42</NEGATIVE_POROSITY_RANGE>
 <SEPARATOR_POROSITY_RANGE>0.35,0.60</SEPARATOR_POROSITY_RANGE>
-<NP_RATIO_RANGE>1.02,1.25</NP_RATIO_RANGE>
+<NEGATIVE_TO_POSITIVE_CAPACITY_RATIO_RANGE>1.02,1.25</NEGATIVE_TO_POSITIVE_CAPACITY_RATIO_RANGE>
 <CAPACITY_BALANCE>ANALYTIC_NEGATIVE_ACTIVE_FRACTION</CAPACITY_BALANCE>
 <FEASIBILITY_POLICY>HARD_FEASIBLE_DECODER</FEASIBILITY_POLICY>
 </DESIGN_CONSTRAINTS>
 <OUTPUT_CONTRACT>
 <OUTPUT_SCHEMA>gradcell.material_design.v1</OUTPUT_SCHEMA>
 <REQUIRED_DESIGN_FIELDS>positive_electrode_porosity,negative_electrode_porosity,separator_porosity,positive_active_material_fraction,negative_to_positive_capacity_ratio</REQUIRED_DESIGN_FIELDS>
-<FORBIDDEN_OUTPUT_FIELDS>np_ratio,positive_active_fraction,negative_active_fraction,positive_electrode_active_fraction,negative_electrode_active_fraction,physics_loss,validation_loss</FORBIDDEN_OUTPUT_FIELDS>
 <OUTPUT_JSON_TEMPLATE>{"schema":"gradcell.material_design.v1","material_parameter_set":"Chen2020","fixed_material_properties":true,"design":{"positive_electrode_porosity":FLOAT,"negative_electrode_porosity":FLOAT,"separator_porosity":FLOAT,"positive_active_material_fraction":FLOAT,"negative_to_positive_capacity_ratio":FLOAT},"derived":{"negative_active_material_fraction":FLOAT,"nominal_capacity_ah":FLOAT,"stack_mass_kg":FLOAT}}</OUTPUT_JSON_TEMPLATE>
 <SELECTION_POLICY>MINIMUM_PHYSICS_LOSS</SELECTION_POLICY>
 </OUTPUT_CONTRACT>
@@ -67,6 +66,8 @@ JSON。本阶段不调用 PyBaMM，避免昂贵物理求解干扰基础语法与
 
 训练标签由现有 K=0 checkpoint 生成。`target_json`、teacher latent 和量化 level 同时保存，
 从而让自回归输出与后续连续物理通道对齐。
+数据生成器会检查每条JSONL记录；只要记录中出现内部缩写或运行期指标字段，就立即终止，
+防止这些词进入阶段一训练语料。该约束由数据生成完成，不向loss添加负面字段惩罚。
 
 ## 模型与损失
 
@@ -80,7 +81,8 @@ L1 = L_causal_json
    + 10.0 L_feasibility
 ```
 
-输入契约显式列出五个必需设计字段、禁止使用的内部别名，并给出完整JSON骨架。`L_schema`
+输入契约只列出合法的五个设计字段并给出完整JSON骨架，不向模型展示内部别名或运行指标。
+`L_schema`
 对 JSON 括号、引号、键名、冒号和逗号对应 token 额外加权；`L_latent` 和
 `L_level` 使同一隐藏状态能够恢复教师设计；`L_feasibility` 检查孔隙率、活性相、N/P 和
 容量平衡约束。最终部署还会把物理解码后的设计重新序列化，所以不会把非法自由文本当作

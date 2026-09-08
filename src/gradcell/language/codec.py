@@ -48,8 +48,8 @@ TASK_TAGS = (
     "</NEGATIVE_POROSITY_RANGE>",
     "<SEPARATOR_POROSITY_RANGE>",
     "</SEPARATOR_POROSITY_RANGE>",
-    "<NP_RATIO_RANGE>",
-    "</NP_RATIO_RANGE>",
+    "<NEGATIVE_TO_POSITIVE_CAPACITY_RATIO_RANGE>",
+    "</NEGATIVE_TO_POSITIVE_CAPACITY_RATIO_RANGE>",
     "<CAPACITY_BALANCE>",
     "</CAPACITY_BALANCE>",
     "<FEASIBILITY_POLICY>",
@@ -60,8 +60,6 @@ TASK_TAGS = (
     "</OUTPUT_SCHEMA>",
     "<REQUIRED_DESIGN_FIELDS>",
     "</REQUIRED_DESIGN_FIELDS>",
-    "<FORBIDDEN_OUTPUT_FIELDS>",
-    "</FORBIDDEN_OUTPUT_FIELDS>",
     "<OUTPUT_JSON_TEMPLATE>",
     "</OUTPUT_JSON_TEMPLATE>",
     "<SELECTION_POLICY>",
@@ -156,7 +154,8 @@ class GradCellLanguageCodec:
             "<POSITIVE_POROSITY_RANGE>0.20,0.42</POSITIVE_POROSITY_RANGE>\n"
             "<NEGATIVE_POROSITY_RANGE>0.20,0.42</NEGATIVE_POROSITY_RANGE>\n"
             "<SEPARATOR_POROSITY_RANGE>0.35,0.60</SEPARATOR_POROSITY_RANGE>\n"
-            "<NP_RATIO_RANGE>1.02,1.25</NP_RATIO_RANGE>\n"
+            "<NEGATIVE_TO_POSITIVE_CAPACITY_RATIO_RANGE>1.02,1.25"
+            "</NEGATIVE_TO_POSITIVE_CAPACITY_RATIO_RANGE>\n"
             "<CAPACITY_BALANCE>ANALYTIC_NEGATIVE_ACTIVE_FRACTION</CAPACITY_BALANCE>\n"
             "<FEASIBILITY_POLICY>HARD_FEASIBLE_DECODER</FEASIBILITY_POLICY>\n"
             "</DESIGN_CONSTRAINTS>\n"
@@ -165,9 +164,6 @@ class GradCellLanguageCodec:
             "<REQUIRED_DESIGN_FIELDS>positive_electrode_porosity,negative_electrode_porosity,"
             "separator_porosity,positive_active_material_fraction,"
             "negative_to_positive_capacity_ratio</REQUIRED_DESIGN_FIELDS>\n"
-            "<FORBIDDEN_OUTPUT_FIELDS>np_ratio,positive_active_fraction,negative_active_fraction,"
-            "positive_electrode_active_fraction,negative_electrode_active_fraction,physics_loss,"
-            "validation_loss</FORBIDDEN_OUTPUT_FIELDS>\n"
             "<OUTPUT_JSON_TEMPLATE>{\"schema\":\"gradcell.material_design.v1\","
             "\"material_parameter_set\":\"Chen2020\",\"fixed_material_properties\":true,"
             "\"design\":{\"positive_electrode_porosity\":FLOAT,"

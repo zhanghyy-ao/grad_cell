@@ -126,7 +126,14 @@ def main() -> None:
                 "teacher_levels": codec.quantize(latent).tolist(),
                 "source_checkpoint": str(args.checkpoint),
             }
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            serialized = json.dumps(record, ensure_ascii=False)
+            forbidden_terms = ("np_ratio", "physics_loss")
+            present = [term for term in forbidden_terms if term in serialized]
+            if present:
+                raise RuntimeError(
+                    f"training record {index} contains forbidden internal fields: {present}"
+                )
+            handle.write(serialized + "\n")
     print(json.dumps({"output": str(args.output), "samples": args.samples, "bins": args.bins}))
 
 
