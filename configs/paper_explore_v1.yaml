@@ -1,0 +1,38 @@
+experiment:
+  name: paper探索
+  id: paper_explore_v1
+  seed: 7
+
+source_archive:
+  path: data/paper_explore_v1/physics_archive_spme_500_s101.npz
+  parameter_set: Chen2020
+  physics_model: SPMe
+  capacity_formula: chen2020_scaled
+
+dataset:
+  samples: 500
+  counts:
+    feasible_regular: 300
+    feasible_boundary: 100
+    infeasible_modeled: 50
+    unsupported_or_ambiguous: 50
+  output: data/paper_explore_v1/dataset.jsonl
+  manifest: data/paper_explore_v1/manifest.json
+
+language:
+  provider: deepseek
+  base_url: https://api.deepseek.com
+  model: deepseek-v4-flash
+  api_key_env: DEEPSEEK_API_KEY
+  temperature: 0.8
+  max_tokens: 500
+  retries: 3
+  timeout_s: 90
+  concurrency: 4
+  enabled: false
+
+split:
+  train: 350
+  validation: 75
+  test: 75
+  seeds: [7, 17, 27]
