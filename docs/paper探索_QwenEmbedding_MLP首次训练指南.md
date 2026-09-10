@@ -114,6 +114,11 @@ python scripts/train_paper_explore_mlp.py \
 - `history.json`
 - `metrics.json`
 - `test_predictions.npz`
+- `benchmark_metrics.csv`
+- `figures/training_curves.png`和`.pdf`
+- `figures/supervised_benchmark.png`和`.pdf`
+
+`history.json`会在训练过程中逐epoch更新，图像默认每10个epoch更新一次，因此服务器训练中断时也会保留已经完成的记录。可用`--plot-every 1`每个epoch更新，或用`--no-plots`关闭绘图。
 
 ### 4.3 正式训练
 
@@ -204,6 +209,8 @@ python scripts/evaluate_paper_explore_joint.py \
 `--prompt-file questions.txt`。输出包括逐样本的`predictions.jsonl`和汇总指标
 `summary.json`。`predicted_performance_proxy`是MLP辅助头预测，正式结论应使用同一行
 `physics`中的SPMe复算结果。
+
+联合测试还会输出`benchmark_metrics.csv`和PNG/PDF图。启用`--physics-model SPMe`后，额外生成`figures/mlp_proxy_vs_physics.png`和`.pdf`，用于比较MLP性能辅助头与SPMe重新仿真的结果。
 
 ## 7. 常见问题
 

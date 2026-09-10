@@ -10,6 +10,11 @@ import numpy as np
 import torch
 
 from extract_paper_explore_embeddings import dtype_from_name, masked_pool, model_input_device
+from paper_explore_reporting import (
+    plot_joint_physics,
+    plot_supervised_benchmark,
+    write_metrics_csv,
+)
 from train_paper_explore_mlp import PaperExploreMLP
 
 from gradcell.design import DesignSpace
@@ -151,6 +156,26 @@ def label_metrics(records: list[dict[str, Any]], latent: np.ndarray, feasibility
         "latent_topk_mae_feasible": float(np.mean(distances)) if distances else float("nan"),
         "feasibility_accuracy": float(np.mean(predicted_labels == labels_array)),
     }
+
+
+def supervised_targets(
+    records: list[dict[str, Any]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    maximum = max(len(row.get("teacher_candidates", [])) or 1 for row in records)
+    candidates = np.zeros((len(records), maximum, 5), dtype=np.float32)
+    mask = np.zeros((len(records), maximum), dtype=bool)
+    performance = np.zeros((len(records), 3), dtype=np.float32)
+    feasible = np.asarray([bool(row["requirement_feasible"]) for row in records])
+    for row_index, row in enumerate(records):
+        candidate_rows = row.get("teacher_candidates") or [
+            {"latent": row["teacher_latent"], **row["teacher_performance"]}
+        ]
+        for candidate_index, candidate in enumerate(candidate_rows):
+            candidates[row_index, candidate_index] = candidate["latent"]
+            mask[row_index, candidate_index] = True
+        primary = candidate_rows[0]
+        performance[row_index] = [primary[name] for name in PERFORMANCE_FIELDS]
+    return candidates, mask, feasible, performance, np.flatnonzero(feasible)
 
 
 def main() -> None:
@@ -296,6 +321,21 @@ def main() -> None:
     (args.output_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    write_metrics_csv(summary, args.output_dir / "benchmark_metrics.csv")
+    if records:
+        candidates, candidate_mask, feasible, target_performance, _ = supervised_targets(records)
+        plot_supervised_benchmark(
+            predicted_latent=latent,
+            candidates=candidates,
+            candidate_mask=candidate_mask,
+            feasible=feasible,
+            feasibility_probability=feasibility,
+            predicted_performance=performance,
+            target_performance=target_performance,
+            output_dir=args.output_dir,
+        )
+    if physics is not None:
+        plot_joint_physics(performance, physics, args.output_dir)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

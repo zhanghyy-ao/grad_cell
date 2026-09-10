@@ -13,6 +13,12 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+from paper_explore_reporting import (
+    plot_supervised_benchmark,
+    plot_training_history,
+    write_metrics_csv,
+)
+
 UNSUPPORTED_LABELS = (
     "cycle_life",
     "safety",
@@ -295,7 +301,11 @@ def main() -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--max-train-samples", type=int)
+    parser.add_argument("--plot-every", type=int, default=10)
+    parser.add_argument("--no-plots", action="store_true")
     args = parser.parse_args()
+    if args.plot_every < 1:
+        parser.error("--plot-every must be positive")
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -350,27 +360,43 @@ def main() -> None:
 
     for epoch in range(1, args.epochs + 1):
         model.train()
-        train_total = 0.0
+        train_totals: dict[str, float] = {}
         train_batches = 0
         for raw_batch in loaders["train"]:
             batch = tuple(value.to(device, non_blocking=True) for value in raw_batch)
             optimizer.zero_grad(set_to_none=True)
             outputs = model(batch[0])
-            loss, _ = batch_loss(outputs, batch, weights)
+            loss, parts = batch_loss(outputs, batch, weights)
             if not torch.isfinite(loss):
                 raise RuntimeError(f"Non-finite loss at epoch {epoch}")
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.gradient_clip)
             optimizer.step()
-            train_total += float(loss.detach())
+            for name, value in parts.items():
+                train_totals[name] = train_totals.get(name, 0.0) + value
             train_batches += 1
         validation, _ = evaluate(model, loaders["validation"], device, weights)
         record = {
             "epoch": float(epoch),
-            "train_loss": train_total / max(train_batches, 1),
+            "train_loss": train_totals["loss"] / max(train_batches, 1),
             "validation_loss": validation["loss"],
         }
+        record.update(
+            {
+                f"train_{name}": value / max(train_batches, 1)
+                for name, value in train_totals.items()
+                if name != "loss"
+            }
+        )
+        record.update(
+            {f"validation_{name}": value for name, value in validation.items() if name != "loss"}
+        )
         history.append(record)
+        (args.output_dir / "history.json").write_text(
+            json.dumps(history, indent=2), encoding="utf-8"
+        )
+        if not args.no_plots and (epoch == 1 or epoch % args.plot_every == 0):
+            plot_training_history(history, args.output_dir)
         print(json.dumps(record))
         if validation["loss"] < best_validation:
             best_validation = validation["loss"]
@@ -439,6 +465,7 @@ def main() -> None:
     (args.output_dir / "metrics.json").write_text(
         json.dumps(metrics, indent=2), encoding="utf-8"
     )
+    write_metrics_csv(metrics, args.output_dir / "benchmark_metrics.csv")
     np.savez_compressed(
         args.output_dir / "test_predictions.npz",
         task_ids=data.task_ids[test_indices],
@@ -446,6 +473,18 @@ def main() -> None:
         feasibility_probability=prediction["feasibility"],
         performance=predicted_performance,
     )
+    if not args.no_plots:
+        plot_training_history(history, args.output_dir)
+        plot_supervised_benchmark(
+            predicted_latent=predicted_latent,
+            candidates=candidates,
+            candidate_mask=candidate_mask,
+            feasible=feasible,
+            feasibility_probability=prediction["feasibility"],
+            predicted_performance=predicted_performance,
+            target_performance=target_performance,
+            output_dir=args.output_dir,
+        )
     print(json.dumps(metrics, indent=2))
 
 
