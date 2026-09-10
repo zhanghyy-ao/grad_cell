@@ -363,6 +363,14 @@ def main() -> None:
     args = parser.parse_args()
 
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
+    language_cfg = config["language"]
+    language_cfg["base_url"] = os.environ.get(
+        "DEEPSEEK_BASE_URL", language_cfg["base_url"]
+    )
+    language_cfg["model"] = os.environ.get("DEEPSEEK_MODEL", language_cfg["model"])
+    language_cfg["concurrency"] = int(
+        os.environ.get("DEEPSEEK_CONCURRENCY", language_cfg.get("concurrency", 1))
+    )
     dataset_cfg = config["dataset"]
     counts = {name: int(value) for name, value in dataset_cfg["counts"].items()}
     requested_samples = int(args.samples or dataset_cfg["samples"])

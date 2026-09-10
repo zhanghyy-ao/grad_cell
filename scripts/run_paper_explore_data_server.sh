@@ -4,6 +4,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export PYTHONPATH="$PWD/src"
 
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
 PYTHON_BIN="${PYTHON_BIN:-python}"
 SHARD_COUNT="${SHARD_COUNT:-4}"
 SAMPLES_PER_SHARD="${SAMPLES_PER_SHARD:-2048}"
