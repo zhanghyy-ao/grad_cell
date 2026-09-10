@@ -13,7 +13,7 @@ fi
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
 CUDA_DEVICE="${CUDA_DEVICE:-0}"
-MODEL_NAME="${QWEN_MODEL_NAME:-Qwen/Qwen3-8B}"
+MODEL_NAME="${QWEN_MODEL_NAME:-$PWD/models/Qwen3-8B}"
 DATA="${PAPER_DATA:-data/paper_explore_2000/dataset.jsonl}"
 EMBEDDINGS="${PAPER_EMBEDDINGS:-data/paper_explore_2000/qwen3_8b_embeddings.npz}"
 RESULT_ROOT="${PAPER_RESULT_ROOT:-results/paper_explore_2000/qwen_mlp}"
@@ -22,7 +22,18 @@ MLP_BATCH_SIZE="${MLP_BATCH_SIZE:-32}"
 LOAD_IN_4BIT="${LOAD_IN_4BIT:-0}"
 
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 test -s "$DATA"
+if [[ ! -d "$MODEL_NAME" ]]; then
+  echo "Local Qwen model directory does not exist: $MODEL_NAME" >&2
+  echo "Set QWEN_MODEL_NAME to the local Qwen3-8B directory." >&2
+  exit 1
+fi
+if [[ ! -s "$MODEL_NAME/config.json" ]]; then
+  echo "Local Qwen model is incomplete; missing: $MODEL_NAME/config.json" >&2
+  exit 1
+fi
 mkdir -p "$(dirname "$EMBEDDINGS")" "$RESULT_ROOT"
 
 embedding_args=(
@@ -33,6 +44,7 @@ embedding_args=(
   --max-length 512
   --batch-size "$EMBED_BATCH_SIZE"
   --dtype bfloat16
+  --local-files-only
 )
 if [[ "$LOAD_IN_4BIT" == "1" ]]; then
   embedding_args+=(--load-in-4bit)

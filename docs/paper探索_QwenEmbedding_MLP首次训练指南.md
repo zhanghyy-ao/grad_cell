@@ -50,7 +50,7 @@ A100 40GB等可直接加载Qwen3-8B BF16的GPU：
 
 ```bash
 CUDA_DEVICE=0 \
-QWEN_MODEL_NAME=Qwen/Qwen3-8B \
+QWEN_MODEL_NAME="$PWD/models/Qwen3-8B" \
 bash scripts/run_paper_explore_training_server.sh
 ```
 
@@ -58,13 +58,19 @@ bash scripts/run_paper_explore_training_server.sh
 
 ```bash
 CUDA_DEVICE=0 \
-QWEN_MODEL_NAME=Qwen/Qwen3-8B \
+QWEN_MODEL_NAME="$PWD/models/Qwen3-8B" \
 LOAD_IN_4BIT=1 \
 EMBED_BATCH_SIZE=2 \
 bash scripts/run_paper_explore_training_server.sh
 ```
 
-如果模型已经下载到服务器：
+脚本默认读取仓库中的 `models/Qwen3-8B`，因此通常可以直接运行：
+
+```bash
+CUDA_DEVICE=0 bash scripts/run_paper_explore_training_server.sh
+```
+
+如果模型位于服务器上的其他目录：
 
 ```bash
 QWEN_MODEL_NAME=/absolute/path/to/Qwen3-8B \
@@ -81,10 +87,11 @@ export PYTHONPATH="$PWD/src"
 
 python scripts/extract_paper_explore_embeddings.py \
   --data data/paper_explore_2000/dataset.jsonl \
-  --model-name Qwen/Qwen3-8B \
+  --model-name "$PWD/models/Qwen3-8B" \
   --output data/paper_explore_2000/qwen3_8b_embeddings.npz \
   --pooling mean --max-length 512 \
-  --batch-size 8 --dtype bfloat16
+  --batch-size 8 --dtype bfloat16 \
+  --local-files-only
 ```
 
 每个batch写入`.partial`缓存。中断后重复相同命令会从已经完成的task ID前缀继续；配置或数据哈希改变时拒绝错误续跑。

@@ -80,6 +80,11 @@ def main() -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--load-in-4bit", action="store_true")
     parser.add_argument("--trust-remote-code", action="store_true")
+    parser.add_argument(
+        "--local-files-only",
+        action="store_true",
+        help="Load model/tokenizer only from local files and never contact Hugging Face.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -113,6 +118,7 @@ def main() -> None:
                 "max_length": args.max_length,
                 "dtype": args.dtype,
                 "load_in_4bit": args.load_in_4bit,
+                "local_files_only": args.local_files_only,
             }
             if any(metadata.get(key) != value for key, value in expected.items()):
                 raise RuntimeError("Partial embedding cache does not match the current settings")
@@ -129,7 +135,9 @@ def main() -> None:
     from transformers import AutoModel, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name, trust_remote_code=args.trust_remote_code
+        args.model_name,
+        trust_remote_code=args.trust_remote_code,
+        local_files_only=args.local_files_only,
     )
     if tokenizer.pad_token_id is None:
         if tokenizer.eos_token_id is None:
@@ -139,6 +147,7 @@ def main() -> None:
     model_kwargs: dict[str, Any] = {
         "trust_remote_code": args.trust_remote_code,
         "low_cpu_mem_usage": True,
+        "local_files_only": args.local_files_only,
     }
     if args.load_in_4bit:
         from transformers import BitsAndBytesConfig
@@ -167,6 +176,7 @@ def main() -> None:
         "max_length": args.max_length,
         "dtype": args.dtype,
         "load_in_4bit": args.load_in_4bit,
+        "local_files_only": args.local_files_only,
         "device": str(device),
     }
 
