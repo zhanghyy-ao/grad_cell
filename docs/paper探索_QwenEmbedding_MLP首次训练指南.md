@@ -154,7 +154,56 @@ MLP包含：
 - 各损失分量；
 - 每个测试任务的latent、可行性概率和性能预测。
 
-这些是离线监督指标。要证明设计有效，下一步还必须把`test_predictions.npz`中的latent经过同一个`DesignSpace`解码，并执行hard-cutoff SPMe，计算需求满足率和oracle regret。
+这些是离线监督指标。要证明设计有效，还必须把预测latent经过同一个`DesignSpace`解码，并执行hard-cutoff SPMe。
+
+### 联合测试
+
+快速测试复用数据集embedding，检查test split上的MLP、latent和结构解码：
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+export PYTHONPATH="$PWD/src"
+
+python scripts/evaluate_paper_explore_joint.py \
+  --checkpoint results/paper_explore_2000/qwen_mlp/seed_7/best_model.pt \
+  --data data/paper_explore_2000/dataset.jsonl \
+  --split test \
+  --embeddings data/paper_explore_2000/qwen3_8b_embeddings.npz \
+  --output-dir results/paper_explore_2000/qwen_mlp/seed_7/joint_test_fast \
+  --device cuda
+```
+
+正式物理测试在同一批预测latent上重新运行SPMe：
+
+```bash
+python scripts/evaluate_paper_explore_joint.py \
+  --checkpoint results/paper_explore_2000/qwen_mlp/seed_7/best_model.pt \
+  --data data/paper_explore_2000/dataset.jsonl \
+  --split test \
+  --embeddings data/paper_explore_2000/qwen3_8b_embeddings.npz \
+  --output-dir results/paper_explore_2000/qwen_mlp/seed_7/joint_test_spme \
+  --device cuda \
+  --physics-model SPMe \
+  --physics-batch-size 8
+```
+
+测试全新的自然语言问题时不传缓存embedding，脚本会重新加载训练时的Qwen：
+
+```bash
+python scripts/evaluate_paper_explore_joint.py \
+  --checkpoint results/paper_explore_2000/qwen_mlp/seed_7/best_model.pt \
+  --prompt "请设计一款70Ah LFP/石墨软包储能电芯，优先兼顾质量和倍率性能。" \
+  --model-name /path/to/Qwen3-8B \
+  --local-files-only \
+  --output-dir results/paper_explore_2000/qwen_mlp/seed_7/custom_prompt \
+  --device cuda \
+  --physics-model SPMe
+```
+
+多条新问题可保存成UTF-8文本文件，每行一个问题，然后将`--prompt`换成
+`--prompt-file questions.txt`。输出包括逐样本的`predictions.jsonl`和汇总指标
+`summary.json`。`predicted_performance_proxy`是MLP辅助头预测，正式结论应使用同一行
+`physics`中的SPMe复算结果。
 
 ## 7. 常见问题
 
