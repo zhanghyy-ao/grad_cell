@@ -1,0 +1,68 @@
+experiment:
+  name: multiset_dfn_language
+  seed: 7
+
+physics:
+  model: DFN
+  parameter_sets:
+    - Chen2020
+    - Marquis2019
+    - Ecker2015
+    - Ai2020
+    - Prada2013
+  samples_per_set: 2048
+  candidate_factor: 4
+  batch_size: 8
+  c_rates: [1.0, 5.0, 6.0]
+  calibration_rate: 0.1
+  calibration_iterations: 2
+  maximum_duration_factor: 1.5
+  time_points: 301
+  rtol: 1.0e-8
+  atol: 1.0e-10
+  output: data/multiset_dfn_language/physics_archive.jsonl
+  audit: data/multiset_dfn_language/physics_audit.jsonl
+  manifest: data/multiset_dfn_language/physics_manifest.json
+
+perturbation:
+  sampler: sobol
+  fields:
+    Positive electrode porosity: [0.80, 1.20]
+    Negative electrode porosity: [0.80, 1.20]
+    Separator porosity: [0.85, 1.15]
+    Positive electrode active material volume fraction: [0.90, 1.10]
+    Negative electrode active material volume fraction: [0.90, 1.10]
+    Positive particle diffusivity multiplier: [0.30, 3.00]
+    Negative particle diffusivity multiplier: [0.30, 3.00]
+
+dataset:
+  tasks_per_set: 1000
+  variants_per_task: 3
+  top_k: 3
+  regular_fraction: 0.80
+  boundary_fraction: 0.20
+  energy_margin_regular: [0.03, 0.12]
+  energy_margin_boundary: [0.001, 0.015]
+  retention_margin_regular: [0.01, 0.05]
+  retention_margin_boundary: [0.001, 0.008]
+  output: data/multiset_dfn_language/dataset.jsonl
+  manifest: data/multiset_dfn_language/dataset_manifest.json
+
+split:
+  train: 0.80
+  validation: 0.10
+  test: 0.10
+
+language:
+  provider: deepseek
+  api_key_env: DEEPSEEK_API_KEY
+  base_url_env: DEEPSEEK_BASE_URL
+  model_env: DEEPSEEK_MODEL
+  concurrency_env: DEEPSEEK_CONCURRENCY
+  default_base_url: https://api.deepseek.com
+  default_model: deepseek-chat
+  default_concurrency: 8
+  temperature: 0.9
+  max_tokens: 500
+  retries: 3
+  timeout_s: 90
