@@ -58,6 +58,35 @@ split:
   validation: 0.10
   test: 0.10
 
+# A description contains finite-precision DFN summaries, so multiple separated
+# structures within these performance tolerances are valid inverse labels.
+inverse_ambiguity:
+  relative_tolerances:
+    reference_capacity_ah: 0.005
+    energy_1c_wh: 0.005
+    capacity_1c_ah: 0.005
+    discharge_time_1c_s: 0.01
+    energy_5c_wh: 0.005
+    capacity_5c_ah: 0.005
+    discharge_time_5c_s: 0.01
+    energy_6c_wh: 0.005
+    capacity_6c_ah: 0.005
+    discharge_time_6c_s: 0.01
+  absolute_tolerances:
+    average_voltage_1c_v: 0.01
+    minimum_voltage_1c_v: 0.01
+    average_voltage_5c_v: 0.01
+    energy_retention_5c: 0.005
+    average_voltage_6c_v: 0.01
+    energy_retention_6c: 0.005
+  minimum_log_rms: 0.10
+  minimum_maximum_fraction: 0.20
+  changed_parameter_fraction: 0.10
+  minimum_changed_parameters: 2
+  maximum_alternatives_per_design: 5
+  audit: data/multiset_dfn_language/inverse_ambiguity_audit_modes_v3.jsonl
+  report: data/multiset_dfn_language/inverse_ambiguity_report_modes_v3.json
+
 language:
   provider: deepseek
   api_key_env: DEEPSEEK_API_KEY

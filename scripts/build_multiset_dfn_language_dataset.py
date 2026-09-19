@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import yaml
 
 
@@ -32,6 +33,23 @@ CORE_METRICS = (
     "discharge_time_6c_s",
     "energy_retention_6c",
 )
+
+
+class DisjointSet:
+    def __init__(self, size: int) -> None:
+        self.parent = list(range(size))
+
+    def find(self, value: int) -> int:
+        while self.parent[value] != value:
+            self.parent[value] = self.parent[self.parent[value]]
+            value = self.parent[value]
+        return value
+
+    def union(self, left: int, right: int) -> None:
+        left_root = self.find(left)
+        right_root = self.find(right)
+        if left_root != right_root:
+            self.parent[right_root] = left_root
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -87,6 +105,247 @@ def design_payload(row: dict[str, Any]) -> dict[str, Any]:
             )
         },
     }
+
+
+def performance_close(
+    left: dict[str, float],
+    right: dict[str, float],
+    relative_tolerances: dict[str, float],
+    absolute_tolerances: dict[str, float],
+) -> tuple[bool, float]:
+    normalized_errors = []
+    for name, tolerance in relative_tolerances.items():
+        denominator = max(abs(left[name]), abs(right[name]), 1e-12)
+        normalized_errors.append(abs(left[name] - right[name]) / denominator / tolerance)
+    for name, tolerance in absolute_tolerances.items():
+        normalized_errors.append(abs(left[name] - right[name]) / tolerance)
+    distance = max(normalized_errors, default=0.0)
+    return distance <= 1.0, float(distance)
+
+
+def design_separation(
+    left: dict[str, Any], right: dict[str, Any], settings: dict[str, Any]
+) -> tuple[bool, dict[str, Any]]:
+    left_values = np.asarray(left["parameter_multipliers"], dtype=np.float64)
+    right_values = np.asarray(right["parameter_multipliers"], dtype=np.float64)
+    if left_values.shape != right_values.shape or np.any(left_values <= 0) or np.any(
+        right_values <= 0
+    ):
+        raise ValueError("Parameter multipliers must be matching positive vectors")
+    log_rms = float(np.sqrt(np.mean(np.square(np.log(left_values / right_values)))))
+    fractional = np.maximum(left_values, right_values) / np.minimum(
+        left_values, right_values
+    ) - 1.0
+    maximum_fraction = float(np.max(fractional))
+    changed_count = int(
+        np.count_nonzero(fractional >= float(settings["changed_parameter_fraction"]))
+    )
+    separated = (
+        log_rms >= float(settings["minimum_log_rms"])
+        or maximum_fraction >= float(settings["minimum_maximum_fraction"])
+        or changed_count >= int(settings["minimum_changed_parameters"])
+    )
+    return separated, {
+        "log_multiplier_rms": log_rms,
+        "maximum_parameter_fraction": maximum_fraction,
+        "changed_parameter_count": changed_count,
+    }
+
+
+def build_ambiguity_index(
+    physics_rows: list[dict[str, Any]], config: dict[str, Any]
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Find DFN-verified designs that are indistinguishable at configured precision."""
+    try:
+        from scipy.spatial import cKDTree
+    except ImportError as exc:
+        raise ImportError(
+            "Inverse ambiguity analysis requires scipy; install gradcell[physics]"
+        ) from exc
+
+    settings = config["inverse_ambiguity"]
+    relative = {
+        name: float(value) for name, value in settings["relative_tolerances"].items()
+    }
+    absolute = {
+        name: float(value) for name, value in settings["absolute_tolerances"].items()
+    }
+    unknown = (set(relative) | set(absolute)) - set(CORE_METRICS)
+    overlap = set(relative) & set(absolute)
+    if unknown or overlap or not relative or not absolute:
+        raise ValueError(
+            f"Invalid ambiguity metrics; unknown={sorted(unknown)}, "
+            f"overlap={sorted(overlap)}"
+        )
+    if any(value <= 0 or value >= 1 for value in relative.values()) or any(
+        value <= 0 for value in absolute.values()
+    ):
+        raise ValueError("Ambiguity tolerances must be positive; relative values must be < 1")
+
+    by_condition: dict[tuple[str, float], list[int]] = {}
+    required_physics = config["physics"]
+    for index, row in enumerate(physics_rows):
+        if row.get("model") != "DFN":
+            raise ValueError(f"Ambiguity analysis requires DFN rows: {row.get('case_id')}")
+        simulation = row["simulation"]
+        strict_enough = (
+            float(simulation["rtol"]) <= float(required_physics["rtol"])
+            and float(simulation["atol"]) <= float(required_physics["atol"])
+            and int(simulation["time_points"]) >= int(required_physics["time_points"])
+        )
+        if not strict_enough:
+            raise ValueError(
+                f"Physics row {row.get('case_id')} is less strict than the configured "
+                "DFN verification settings; regenerate the archive before ambiguity analysis"
+            )
+        key = (
+            row["parameter_set"],
+            round(float(simulation["temperature_k"]), 8),
+        )
+        by_condition.setdefault(key, []).append(index)
+
+    disjoint = DisjointSet(len(physics_rows))
+    neighbors: list[list[dict[str, Any]]] = [[] for _ in physics_rows]
+    performance_pair_count = 0
+    separated_pair_count = 0
+    relative_names = list(relative)
+    absolute_names = list(absolute)
+    for indices in by_condition.values():
+        features = []
+        for index in indices:
+            performance = physics_rows[index]["performance"]
+            row_features = [
+                np.log(max(float(performance[name]), 1e-300))
+                / -np.log1p(-relative[name])
+                for name in relative_names
+            ]
+            row_features.extend(
+                float(performance[name]) / absolute[name] for name in absolute_names
+            )
+            features.append(row_features)
+        tree = cKDTree(np.asarray(features, dtype=np.float64))
+        for local_left, local_right in sorted(tree.query_pairs(r=1.0, p=np.inf)):
+            left_index = indices[local_left]
+            right_index = indices[local_right]
+            left = physics_rows[left_index]
+            right = physics_rows[right_index]
+            if left["physical_design_id"] == right["physical_design_id"]:
+                continue
+            close, performance_distance = performance_close(
+                left["performance"], right["performance"], relative, absolute
+            )
+            if not close:
+                continue
+            performance_pair_count += 1
+            # Performance-near designs share a split even when structures are also near.
+            disjoint.union(left_index, right_index)
+            separated, separation = design_separation(left, right, settings)
+            if not separated:
+                continue
+            separated_pair_count += 1
+            for source_index, target_index in (
+                (left_index, right_index),
+                (right_index, left_index),
+            ):
+                target = physics_rows[target_index]
+                neighbors[source_index].append(
+                    {
+                        "physical_design_id": target["physical_design_id"],
+                        "physics_source": target["case_id"],
+                        "performance_distance": performance_distance,
+                        **separation,
+                        "teacher_design": design_payload(target),
+                    }
+                )
+
+    components: dict[int, list[int]] = {}
+    for index in range(len(physics_rows)):
+        components.setdefault(disjoint.find(index), []).append(index)
+    group_ids = {}
+    for members in components.values():
+        member_ids = sorted(physics_rows[index]["physical_design_id"] for index in members)
+        digest = hashlib.sha256("\n".join(member_ids).encode("utf-8")).hexdigest()[:20]
+        for index in members:
+            group_ids[index] = f"performance-equivalence-{digest}"
+
+    maximum_alternatives = int(settings["maximum_alternatives_per_design"])
+    ambiguity_by_id = {}
+    ambiguous_designs = 0
+    alternative_counts = []
+    audit_rows = []
+    for index, row in enumerate(physics_rows):
+        alternatives = sorted(
+            neighbors[index],
+            key=lambda item: (
+                item["performance_distance"],
+                -item["log_multiplier_rms"],
+                item["physical_design_id"],
+            ),
+        )[:maximum_alternatives]
+        group_size = len(components[disjoint.find(index)])
+        if alternatives:
+            ambiguous_designs += 1
+        alternative_counts.append(len(alternatives))
+        value = {
+            "equivalence_group_id": group_ids[index],
+            "performance_equivalence_group_size": group_size,
+            "is_one_to_many": bool(alternatives),
+            "alternative_design_count": len(alternatives),
+            "alternative_teacher_designs": alternatives,
+        }
+        ambiguity_by_id[row["physical_design_id"]] = value
+        audit_rows.append(
+            {
+                "physical_design_id": row["physical_design_id"],
+                "physics_source": row["case_id"],
+                "parameter_set": row["parameter_set"],
+                **value,
+            }
+        )
+    counts = np.asarray(alternative_counts, dtype=np.float64)
+    grouped_rates = {}
+    for field in ("parameter_set", "mode"):
+        grouped_rates[f"by_{field}"] = {}
+        for name in sorted({str(row[field]) for row in physics_rows}):
+            member_indices = [
+                index for index, row in enumerate(physics_rows) if str(row[field]) == name
+            ]
+            ambiguous = sum(bool(neighbors[index]) for index in member_indices)
+            grouped_rates[f"by_{field}"][name] = {
+                "physical_designs": len(member_indices),
+                "ambiguous_designs": ambiguous,
+                "ambiguity_rate": ambiguous / max(len(member_indices), 1),
+            }
+    summary = {
+        "schema": "gradcell.inverse_ambiguity_report.v1",
+        "verification_basis": (
+            "Each source and alternative design is an independently simulated row "
+            "from the strict DFN physics archive."
+        ),
+        "physical_designs": len(physics_rows),
+        "performance_near_pair_count": performance_pair_count,
+        "structurally_separated_pair_count": separated_pair_count,
+        "equivalence_groups": len(components),
+        "ambiguous_designs": ambiguous_designs,
+        "ambiguity_rate": ambiguous_designs / max(len(physics_rows), 1),
+        "alternatives_per_design_mean": float(counts.mean()) if len(counts) else 0.0,
+        "alternatives_per_design_p50": float(np.quantile(counts, 0.5)) if len(counts) else 0.0,
+        "alternatives_per_design_p90": float(np.quantile(counts, 0.9)) if len(counts) else 0.0,
+        "relative_tolerances": relative,
+        "absolute_tolerances": absolute,
+        "design_separation": {
+            name: settings[name]
+            for name in (
+                "minimum_log_rms",
+                "minimum_maximum_fraction",
+                "changed_parameter_fraction",
+                "minimum_changed_parameters",
+            )
+        },
+        **grouped_rates,
+        "rows": audit_rows,
+    }
+    return ambiguity_by_id, summary
 
 
 def observation_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -153,7 +412,9 @@ def deterministic_description(observation: dict[str, Any], variant: int) -> str:
 
 
 def build_records(
-    physics_rows: list[dict[str, Any]], config: dict[str, Any]
+    physics_rows: list[dict[str, Any]],
+    config: dict[str, Any],
+    ambiguity_by_id: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     seed = int(config["experiment"]["seed"])
     variants = int(config["dataset"]["variants_per_design"])
@@ -167,7 +428,8 @@ def build_records(
     for row in physics_rows:
         observation = observation_payload(row)
         target = design_payload(row)
-        split = split_for_design(row["physical_design_id"], seed, ratios)
+        ambiguity = ambiguity_by_id[row["physical_design_id"]]
+        split = split_for_design(ambiguity["equivalence_group_id"], seed, ratios)
         for variant in range(variants):
             description = deterministic_description(observation, variant)
             task_id = f"battery-description-{row['physical_design_id']}-v{variant:02d}"
@@ -182,6 +444,18 @@ def build_records(
                     "battery_description": description,
                     "observation_canonical": observation,
                     "teacher_design": target,
+                    "alternative_teacher_designs": ambiguity[
+                        "alternative_teacher_designs"
+                    ],
+                    "inverse_ambiguity": {
+                        name: ambiguity[name]
+                        for name in (
+                            "equivalence_group_id",
+                            "performance_equivalence_group_size",
+                            "is_one_to_many",
+                            "alternative_design_count",
+                        )
+                    },
                     "verified_performance": row["performance"],
                     "messages": [
                         {
@@ -358,12 +632,23 @@ def validate_dataset(records: list[dict[str, Any]]) -> dict[str, Any]:
     if len(task_ids) != len(set(task_ids)):
         raise ValueError("task_id values are not unique")
     design_splits: dict[str, set[str]] = {}
+    equivalence_splits: dict[str, set[str]] = {}
     for row in records:
         design_splits.setdefault(row["physical_design_id"], set()).add(row["split"])
+        group_id = row["inverse_ambiguity"]["equivalence_group_id"]
+        equivalence_splits.setdefault(group_id, set()).add(row["split"])
         json.loads(row["messages"][2]["content"])
     leaked = [design_id for design_id, splits in design_splits.items() if len(splits) > 1]
     if leaked:
         raise RuntimeError(f"physical-design split leakage detected for {len(leaked)} designs")
+    equivalence_leaks = [
+        group_id for group_id, splits in equivalence_splits.items() if len(splits) > 1
+    ]
+    if equivalence_leaks:
+        raise RuntimeError(
+            "performance-equivalence split leakage detected for "
+            f"{len(equivalence_leaks)} groups"
+        )
     parameter_sets = sorted(
         {row["observation_canonical"]["parameter_set"] for row in records}
     )
@@ -385,6 +670,10 @@ def validate_dataset(records: list[dict[str, Any]]) -> dict[str, Any]:
             for row in records
         ),
         "quality_flagged_records": sum(bool(row.get("quality_flags")) for row in records),
+        "one_to_many_records": sum(
+            bool(row["inverse_ambiguity"]["is_one_to_many"]) for row in records
+        ),
+        "performance_equivalence_groups": len(equivalence_splits),
     }
 
 
@@ -407,7 +696,8 @@ def main() -> None:
     physics_rows = read_jsonl(archive)
     if not physics_rows:
         raise ValueError(f"Physics archive is empty: {archive}")
-    records = build_records(physics_rows, config)
+    ambiguity_by_id, ambiguity_summary = build_ambiguity_index(physics_rows, config)
+    records = build_records(physics_rows, config, ambiguity_by_id)
     if args.with_deepseek:
         apply_deepseek(
             records,
@@ -416,6 +706,10 @@ def main() -> None:
             require_success=args.require_deepseek_success,
         )
     write_jsonl(output, records)
+    ambiguity_audit = Path(config["inverse_ambiguity"]["audit"])
+    write_jsonl(ambiguity_audit, ambiguity_summary.pop("rows"))
+    ambiguity_report = Path(config["inverse_ambiguity"]["report"])
+    atomic_json(ambiguity_report, ambiguity_summary)
     validation = validate_dataset(records)
     manifest = {
         "schema": "gradcell.battery_description_manifest.v1",
@@ -426,6 +720,9 @@ def main() -> None:
         "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
         "deepseek_requested": bool(args.with_deepseek),
         "validation": validation,
+        "inverse_ambiguity_audit": str(ambiguity_audit),
+        "inverse_ambiguity_report": str(ambiguity_report),
+        "inverse_ambiguity": ambiguity_summary,
         "identifiability_note": (
             "The mapping from finite performance summaries to seven parameters may be "
             "one-to-many; teacher labels are simulator-consistent reconstructions, not "
