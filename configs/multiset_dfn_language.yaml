@@ -20,9 +20,9 @@ physics:
   time_points: 301
   rtol: 1.0e-8
   atol: 1.0e-10
-  output: data/multiset_dfn_language/physics_archive.jsonl
-  audit: data/multiset_dfn_language/physics_audit.jsonl
-  manifest: data/multiset_dfn_language/physics_manifest.json
+  output: data/multiset_dfn_language/physics_archive_description_v2.jsonl
+  audit: data/multiset_dfn_language/physics_audit_description_v2.jsonl
+  manifest: data/multiset_dfn_language/physics_manifest_description_v2.json
 
 perturbation:
   sampler: sobol
@@ -36,17 +36,9 @@ perturbation:
     Negative particle diffusivity multiplier: [0.30, 3.00]
 
 dataset:
-  tasks_per_set: 1000
-  variants_per_task: 3
-  top_k: 3
-  regular_fraction: 0.80
-  boundary_fraction: 0.20
-  energy_margin_regular: [0.03, 0.12]
-  energy_margin_boundary: [0.001, 0.015]
-  retention_margin_regular: [0.01, 0.05]
-  retention_margin_boundary: [0.001, 0.008]
-  output: data/multiset_dfn_language/dataset.jsonl
-  manifest: data/multiset_dfn_language/dataset_manifest.json
+  variants_per_design: 3
+  output: data/multiset_dfn_language/battery_description_dataset_v2.jsonl
+  manifest: data/multiset_dfn_language/battery_description_manifest_v2.json
 
 split:
   train: 0.80

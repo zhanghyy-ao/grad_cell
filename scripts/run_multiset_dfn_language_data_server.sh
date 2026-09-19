@@ -23,7 +23,7 @@ else
   echo "[1/2] Skip DFN generation because RUN_PHYSICS=$RUN_PHYSICS"
 fi
 
-echo "[2/2] Build grouped language-training records"
+echo "[2/2] Build battery-description-to-parameter-design records"
 dataset_args=(--config "$CONFIG")
 if [[ "$WITH_DEEPSEEK" == "1" ]]; then
   : "${DEEPSEEK_API_KEY:?Set DEEPSEEK_API_KEY in .env}"

@@ -161,6 +161,15 @@ def simulate_batch(
             metric[f"capacity_{suffix}_ah"] = float(
                 results[rate].delivered_capacity_ah[index]
             )
+            metric[f"average_voltage_{suffix}_v"] = float(
+                results[rate].average_voltage_v[index]
+            )
+            metric[f"minimum_voltage_{suffix}_v"] = float(
+                results[rate].minimum_voltage_v[index]
+            )
+            metric[f"discharge_time_{suffix}_s"] = float(
+                results[rate].discharge_time_s[index]
+            )
             metric[f"energy_retention_{suffix}"] = float(
                 results[rate].delivered_energy_wh[index] / reference_energy[index]
             )
@@ -315,7 +324,7 @@ def main() -> None:
                 if selected:
                     accepted_rows.append(
                         {
-                            "schema": "gradcell.multiset_dfn_physics.v1",
+                            "schema": "gradcell.multiset_dfn_physics.v2",
                             "case_id": case_id,
                             "physical_design_id": hashlib.sha256(
                                 case_id.encode("utf-8")
