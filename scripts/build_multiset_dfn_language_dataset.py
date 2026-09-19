@@ -76,6 +76,7 @@ def design_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema": "gradcell.multiset_parameter_design.v1",
         "base_parameter_set": row["parameter_set"],
+        "generation_mode": row["mode"],
         "parameter_updates": {
             name: {"multiplier": float(multiplier), "value": float(value)}
             for name, multiplier, value in zip(
@@ -176,6 +177,7 @@ def build_records(
                     "task_id": task_id,
                     "description_family_id": row["physical_design_id"],
                     "physical_design_id": row["physical_design_id"],
+                    "generation_mode": row["mode"],
                     "split": split,
                     "battery_description": description,
                     "observation_canonical": observation,

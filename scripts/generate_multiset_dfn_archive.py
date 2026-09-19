@@ -82,6 +82,48 @@ def sobol_multipliers(
     return np.exp(log_low + unit * (log_high - log_low))
 
 
+def regular_multipliers(count: int, bounds: np.ndarray, seed: int) -> np.ndarray:
+    """Change one parameter per case, analogous to the source benchmark's single mode."""
+    sampled = sobol_multipliers(count, bounds, seed)
+    result = np.ones_like(sampled)
+    selected = np.arange(count) % sampled.shape[1]
+    result[np.arange(count), selected] = sampled[np.arange(count), selected]
+    return result
+
+
+def review_difference(
+    metrics: dict[str, Any], nominal: dict[str, Any], thresholds: dict[str, Any]
+) -> tuple[bool, dict[str, float]]:
+    suffixes = ("1c", "5c", "6c")
+    capacity_change = max(
+        abs(metrics[f"capacity_{suffix}_ah"] - nominal[f"capacity_{suffix}_ah"])
+        / max(abs(nominal[f"capacity_{suffix}_ah"]), 1e-12)
+        for suffix in suffixes
+    )
+    energy_change = max(
+        abs(metrics[f"energy_{suffix}_wh"] - nominal[f"energy_{suffix}_wh"])
+        / max(abs(nominal[f"energy_{suffix}_wh"]), 1e-12)
+        for suffix in suffixes
+    )
+    voltage_change = max(
+        abs(
+            metrics[f"average_voltage_{suffix}_v"]
+            - nominal[f"average_voltage_{suffix}_v"]
+        )
+        for suffix in suffixes
+    )
+    informative = (
+        capacity_change >= float(thresholds["min_capacity_change_fraction"])
+        or energy_change >= float(thresholds["min_energy_change_fraction"])
+        or voltage_change >= float(thresholds["min_average_voltage_change_v"])
+    )
+    return informative, {
+        "maximum_capacity_change_fraction": float(capacity_change),
+        "maximum_energy_change_fraction": float(energy_change),
+        "maximum_average_voltage_change_v": float(voltage_change),
+    }
+
+
 def nominal_capacity(backend: PyBaMMBackend) -> float:
     try:
         value = float(backend.parameters["Nominal cell capacity [A.h]"])
@@ -205,25 +247,36 @@ def main() -> None:
     experiment = config["experiment"]
     physics = config["physics"]
     perturbation = config["perturbation"]
+    review = config["review"]
     output = args.output or Path(physics["output"])
     audit_path = args.audit or Path(physics["audit"])
     parameter_sets = args.parameter_sets or list(physics["parameter_sets"])
-    unknown_fields = set(perturbation["fields"]) - set(PARAMETER_FIELDS)
-    missing_fields = set(PARAMETER_FIELDS) - set(perturbation["fields"])
-    if unknown_fields or missing_fields:
-        raise ValueError(
-            f"Perturbation field mismatch; unknown={sorted(unknown_fields)}, "
-            f"missing={sorted(missing_fields)}"
+    mode_bounds = {}
+    for mode in ("regular", "extreme"):
+        fields = perturbation[f"{mode}_fields"]
+        unknown_fields = set(fields) - set(PARAMETER_FIELDS)
+        missing_fields = set(PARAMETER_FIELDS) - set(fields)
+        if unknown_fields or missing_fields:
+            raise ValueError(
+                f"{mode} field mismatch; unknown={sorted(unknown_fields)}, "
+                f"missing={sorted(missing_fields)}"
+            )
+        mode_bounds[mode] = np.asarray(
+            [fields[name] for name in PARAMETER_FIELDS], dtype=np.float64
         )
-    bounds = np.asarray(
-        [perturbation["fields"][name] for name in PARAMETER_FIELDS], dtype=np.float64
-    )
-    if np.any(bounds <= 0.0) or np.any(bounds[:, 0] >= bounds[:, 1]):
-        raise ValueError("Every multiplier interval must be positive and increasing")
+        bounds = mode_bounds[mode]
+        if np.any(bounds <= 0.0) or np.any(bounds[:, 0] >= bounds[:, 1]):
+            raise ValueError(f"Every {mode} multiplier interval must be positive")
 
     existing = load_jsonl(output)
-    accepted_by_set = {
-        name: sum(row["parameter_set"] == name for row in existing)
+    accepted_by_set_mode = {
+        name: {
+            mode: sum(
+                row["parameter_set"] == name and row.get("mode") == mode
+                for row in existing
+            )
+            for mode in ("regular", "extreme")
+        }
         for name in parameter_sets
     }
     processed = {
@@ -233,14 +286,18 @@ def main() -> None:
     processed.update(
         (row["parameter_set"], int(row["candidate_index"])) for row in existing
     )
-    requested = int(physics["samples_per_set"])
-    candidate_count = requested * int(physics["candidate_factor"])
+    requested_per_mode = int(physics["samples_per_mode"])
+    candidate_count_per_mode = requested_per_mode * int(physics["candidate_factor"])
+    candidate_count = 2 * candidate_count_per_mode
     batch_size = int(physics["batch_size"])
     rates = tuple(float(value) for value in physics["c_rates"])
     seed = int(experiment["seed"])
 
     for set_index, parameter_set in enumerate(parameter_sets):
-        if accepted_by_set[parameter_set] >= requested:
+        if all(
+            accepted_by_set_mode[parameter_set][mode] >= requested_per_mode
+            for mode in ("regular", "extreme")
+        ):
             print(f"skip completed parameter set: {parameter_set}", flush=True)
             continue
         calibration_backend = make_backend(
@@ -261,16 +318,39 @@ def main() -> None:
         nominal_values = calibration_backend.nominal_input_values.copy()
         capacity_ah = nominal_capacity(calibration_backend)
         temperature_k = scalar_parameter(calibration_backend, "Initial temperature [K]")
-        multipliers = sobol_multipliers(
-            candidate_count,
-            bounds,
+        regular = regular_multipliers(
+            candidate_count_per_mode,
+            mode_bounds["regular"],
             seed + 1009 * set_index,
+        )
+        extreme = sobol_multipliers(
+            candidate_count_per_mode,
+            mode_bounds["extreme"],
+            seed + 1009 * set_index + 503,
+        )
+        multipliers = np.concatenate([regular, extreme])
+        modes = np.asarray(
+            ["regular"] * candidate_count_per_mode
+            + ["extreme"] * candidate_count_per_mode
         )
         values = nominal_values[None, :] * multipliers
         feasible = structural_feasibility(values)
+        nominal_metrics, nominal_audit = simulate_batch(
+            nominal_values[None, :],
+            capacity_ah,
+            calibration_backend,
+            rate_backends,
+            physics,
+        )
+        if not nominal_audit[0]["solver_success"]:
+            raise RuntimeError(f"Nominal DFN review failed for {parameter_set}")
+        nominal_metric = nominal_metrics[0]
 
         for start in range(0, candidate_count, batch_size):
-            if accepted_by_set[parameter_set] >= requested:
+            if all(
+                accepted_by_set_mode[parameter_set][mode] >= requested_per_mode
+                for mode in ("regular", "extreme")
+            ):
                 break
             candidate_indices = [
                 index
@@ -294,16 +374,30 @@ def main() -> None:
                 solver_by_index = dict(zip(physics_indices, batch_audits, strict=True))
 
             accepted_rows, audit_rows = [], []
+            batch_selected = {"regular": 0, "extreme": 0}
             for candidate_index in candidate_indices:
-                case_id = f"{parameter_set}-{seed}-{candidate_index:07d}"
+                mode = str(modes[candidate_index])
+                case_id = f"{parameter_set}-{mode}-{seed}-{candidate_index:07d}"
                 solver = solver_by_index.get(candidate_index)
                 success = bool(feasible[candidate_index] and solver and solver["solver_success"])
+                informative, review_metrics = (
+                    review_difference(
+                        metrics_by_index[candidate_index], nominal_metric, review
+                    )
+                    if success
+                    else (False, {})
+                )
                 selected = (
                     success
-                    and accepted_by_set[parameter_set] + len(accepted_rows) < requested
+                    and informative
+                    and accepted_by_set_mode[parameter_set][mode]
+                    + batch_selected[mode]
+                    < requested_per_mode
                 )
                 if selected:
                     reason = "accepted"
+                elif success and not informative:
+                    reason = "indistinguishable_from_nominal"
                 elif success:
                     reason = "successful_but_quota_full"
                 elif feasible[candidate_index]:
@@ -314,29 +408,33 @@ def main() -> None:
                     {
                         "case_id": case_id,
                         "parameter_set": parameter_set,
+                        "mode": mode,
                         "candidate_index": candidate_index,
                         "accepted": selected,
                         "solver_success": success,
                         "reason": reason,
+                        "review": review_metrics,
                         "solver": solver,
                     }
                 )
                 if selected:
                     accepted_rows.append(
                         {
-                            "schema": "gradcell.multiset_dfn_physics.v2",
+                            "schema": "gradcell.multiset_dfn_physics.v3",
                             "case_id": case_id,
                             "physical_design_id": hashlib.sha256(
                                 case_id.encode("utf-8")
                             ).hexdigest()[:20],
                             "model": "DFN",
                             "parameter_set": parameter_set,
+                            "mode": mode,
                             "candidate_index": candidate_index,
                             "parameter_names": list(PARAMETER_FIELDS),
                             "nominal_parameter_values": nominal_values.tolist(),
                             "parameter_multipliers": multipliers[candidate_index].tolist(),
                             "parameter_values": values[candidate_index].tolist(),
                             "performance": metrics_by_index[candidate_index],
+                            "review": review_metrics,
                             "simulation": {
                                 "c_rates": list(rates),
                                 "calibration_rate": float(physics["calibration_rate"]),
@@ -350,37 +448,45 @@ def main() -> None:
                             },
                         }
                     )
+                    batch_selected[mode] += 1
             append_jsonl(audit_path, audit_rows)
             append_jsonl(output, accepted_rows)
-            accepted_by_set[parameter_set] += len(accepted_rows)
+            for mode in ("regular", "extreme"):
+                accepted_by_set_mode[parameter_set][mode] += batch_selected[mode]
             processed.update((parameter_set, index) for index in candidate_indices)
             print(
                 json.dumps(
                     {
                         "parameter_set": parameter_set,
-                        "accepted": accepted_by_set[parameter_set],
-                        "requested": requested,
+                        "accepted": accepted_by_set_mode[parameter_set],
+                        "requested_per_mode": requested_per_mode,
                         "processed_candidates": min(start + batch_size, candidate_count),
                     }
                 ),
                 flush=True,
             )
-        if accepted_by_set[parameter_set] < requested:
+        incomplete = {
+            mode: count
+            for mode, count in accepted_by_set_mode[parameter_set].items()
+            if count < requested_per_mode
+        }
+        if incomplete:
             raise RuntimeError(
-                f"{parameter_set}: only {accepted_by_set[parameter_set]}/{requested} "
-                "successful designs; increase physics.candidate_factor or narrow bounds"
+                f"{parameter_set}: incomplete modes {incomplete}; increase "
+                "physics.candidate_factor or revise bounds/review thresholds"
             )
 
     manifest = {
-        "schema": "gradcell.multiset_dfn_physics_manifest.v1",
+        "schema": "gradcell.multiset_dfn_physics_manifest.v3",
         "config": str(args.config),
         "output": str(output),
         "audit": str(audit_path),
         "parameter_sets": parameter_sets,
-        "accepted_by_parameter_set": accepted_by_set,
+        "accepted_by_parameter_set_and_mode": accepted_by_set_mode,
         "parameter_fields": list(PARAMETER_FIELDS),
         "physics": physics,
         "perturbation": perturbation,
+        "review": review,
     }
     atomic_json(Path(physics["manifest"]), manifest)
     print(json.dumps(manifest, ensure_ascii=False, indent=2), flush=True)

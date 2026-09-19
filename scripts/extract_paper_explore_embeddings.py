@@ -25,8 +25,6 @@ def load_rows(path: Path) -> list[dict[str, Any]]:
     task_ids = [str(row["task_id"]) for row in rows]
     if len(task_ids) != len(set(task_ids)):
         raise ValueError("task_id values must be unique")
-    if any(not str(row.get("requirement_text", "")).strip() for row in rows):
-        raise ValueError("Every row must contain a non-empty requirement_text")
     return rows
 
 
@@ -70,6 +68,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Extract frozen Qwen embeddings")
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--model-name", required=True)
+    parser.add_argument(
+        "--text-field",
+        default="auto",
+        help="JSONL text field, or 'auto' for battery_description/requirement_text.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--pooling", choices=("mean", "last"), default="mean")
     parser.add_argument("--max-length", type=int, default=512)
@@ -102,7 +105,19 @@ def main() -> None:
     rows = load_rows(args.data)
     task_ids = np.asarray([str(row["task_id"]) for row in rows])
     splits = np.asarray([str(row["split"]) for row in rows])
-    texts = [str(row["requirement_text"]) for row in rows]
+    if args.text_field == "auto":
+        text_fields = [
+            "battery_description" if "battery_description" in row else "requirement_text"
+            for row in rows
+        ]
+        if len(set(text_fields)) != 1:
+            raise ValueError("Auto text-field detection found mixed dataset schemas")
+        text_field = text_fields[0]
+    else:
+        text_field = args.text_field
+    texts = [str(row.get(text_field, "")).strip() for row in rows]
+    if any(not value for value in texts):
+        raise ValueError(f"Every row must contain a non-empty {text_field!r}")
     dataset_hash = file_sha256(args.data)
     partial = args.output.with_suffix(args.output.suffix + ".partial")
 
@@ -119,6 +134,7 @@ def main() -> None:
                 "dtype": args.dtype,
                 "load_in_4bit": args.load_in_4bit,
                 "local_files_only": args.local_files_only,
+                "text_field": text_field,
             }
             if any(metadata.get(key) != value for key, value in expected.items()):
                 raise RuntimeError("Partial embedding cache does not match the current settings")
@@ -148,6 +164,7 @@ def main() -> None:
         "trust_remote_code": args.trust_remote_code,
         "low_cpu_mem_usage": True,
         "local_files_only": args.local_files_only,
+        "text_field": text_field,
     }
     if args.load_in_4bit:
         from transformers import BitsAndBytesConfig

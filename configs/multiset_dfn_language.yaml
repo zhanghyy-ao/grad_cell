@@ -6,11 +6,11 @@ physics:
   model: DFN
   parameter_sets:
     - Chen2020
-    - Marquis2019
-    - Ecker2015
-    - Ai2020
+    - ORegan2022
     - Prada2013
-  samples_per_set: 2048
+    - Ecker2015
+    - Marquis2019
+  samples_per_mode: 1024
   candidate_factor: 4
   batch_size: 8
   c_rates: [1.0, 5.0, 6.0]
@@ -20,13 +20,13 @@ physics:
   time_points: 301
   rtol: 1.0e-8
   atol: 1.0e-10
-  output: data/multiset_dfn_language/physics_archive_description_v2.jsonl
-  audit: data/multiset_dfn_language/physics_audit_description_v2.jsonl
-  manifest: data/multiset_dfn_language/physics_manifest_description_v2.json
+  output: data/multiset_dfn_language/physics_archive_modes_v3.jsonl
+  audit: data/multiset_dfn_language/physics_audit_modes_v3.jsonl
+  manifest: data/multiset_dfn_language/physics_manifest_modes_v3.json
 
 perturbation:
   sampler: sobol
-  fields:
+  regular_fields:
     Positive electrode porosity: [0.80, 1.20]
     Negative electrode porosity: [0.80, 1.20]
     Separator porosity: [0.85, 1.15]
@@ -34,11 +34,24 @@ perturbation:
     Negative electrode active material volume fraction: [0.90, 1.10]
     Positive particle diffusivity multiplier: [0.30, 3.00]
     Negative particle diffusivity multiplier: [0.30, 3.00]
+  extreme_fields:
+    Positive electrode porosity: [0.65, 1.35]
+    Negative electrode porosity: [0.65, 1.35]
+    Separator porosity: [0.70, 1.30]
+    Positive electrode active material volume fraction: [0.80, 1.20]
+    Negative electrode active material volume fraction: [0.80, 1.20]
+    Positive particle diffusivity multiplier: [0.10, 10.00]
+    Negative particle diffusivity multiplier: [0.10, 10.00]
+
+review:
+  min_capacity_change_fraction: 0.01
+  min_energy_change_fraction: 0.01
+  min_average_voltage_change_v: 0.005
 
 dataset:
   variants_per_design: 3
-  output: data/multiset_dfn_language/battery_description_dataset_v2.jsonl
-  manifest: data/multiset_dfn_language/battery_description_manifest_v2.json
+  output: data/multiset_dfn_language/battery_description_modes_v3.jsonl
+  manifest: data/multiset_dfn_language/battery_description_manifest_modes_v3.json
 
 split:
   train: 0.80
