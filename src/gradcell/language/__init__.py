@@ -8,6 +8,12 @@ from .json_design import (
     differentiable_design_penalty,
 )
 from .model import LanguageGradCell, LanguageGradCellOutput, QwenBackbone
+from .physics_guided import (
+    DEFAULT_PERFORMANCE_FIELDS,
+    DFNPerformanceSurrogate,
+    SingleDesignPhysicsMLP,
+    freeze_surrogate,
+)
 
 __all__ = [
     "GradCellLanguageCodec",
@@ -17,6 +23,10 @@ __all__ = [
     "MaterialDesignJSONCodec",
     "ParsedMaterialDesign",
     "QwenBackbone",
+    "DEFAULT_PERFORMANCE_FIELDS",
+    "DFNPerformanceSurrogate",
+    "SingleDesignPhysicsMLP",
     "StructuredPreferenceTask",
     "differentiable_design_penalty",
+    "freeze_surrogate",
 ]
