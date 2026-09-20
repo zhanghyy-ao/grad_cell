@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -507,22 +508,140 @@ def protected_anchors(observation: dict[str, Any]) -> list[str]:
     ]
 
 
-def deepseek_description(record: dict[str, Any], language: dict[str, Any]) -> str:
+def protected_placeholders(observation: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    replacements = {
+        "[[PARAMETER_SET]]": str(observation["parameter_set"]),
+        "[[TEMPERATURE_K]]": f"{observation['temperature_k']:.2f}",
+        **{
+            f"[[{name.upper()}]]": f"{observation['performance'][name]:.6f}"
+            for name in CORE_METRICS
+        },
+    }
+    facts = {
+        "parameter_set": "[[PARAMETER_SET]]",
+        "temperature_k": "[[TEMPERATURE_K]]",
+        "performance": {
+            name: f"[[{name.upper()}]]" for name in CORE_METRICS
+        },
+    }
+    return facts, replacements
+
+
+def restore_placeholders(text: str, replacements: dict[str, str]) -> str:
+    missing = [token for token in replacements if text.count(token) != 1]
+    unknown = sorted(set(re.findall(r"\[\[[A-Z0-9_]+\]\]", text)) - set(replacements))
+    if missing or unknown:
+        raise InvalidLanguageResponse(
+            "Placeholder validation failed; each required token must occur exactly once; "
+            f"missing_or_repeated={missing}, unknown={unknown}; preview={text[:160]!r}"
+        )
+    for token, value in replacements.items():
+        text = text.replace(token, value)
+    return text
+
+
+class FatalLanguageAPIError(RuntimeError):
+    """An API error that must stop the batch immediately, such as exhausted credit."""
+
+
+class RetryableLanguageAPIError(RuntimeError):
+    """A transient API error for which a bounded retry is appropriate."""
+
+
+class InvalidLanguageResponse(ValueError):
+    """A completed, billable response that cannot be accepted as a description."""
+
+    def __init__(self, message: str, usage: dict[str, float] | None = None) -> None:
+        super().__init__(message)
+        self.usage = usage or {}
+
+
+def response_text(content: Any) -> str:
+    """Accept OpenAI-style text, JSON, fenced JSON, or multipart text content."""
+    if isinstance(content, list):
+        content = "".join(
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") in (None, "text")
+        )
+    if not isinstance(content, str) or not content.strip():
+        raise InvalidLanguageResponse("API returned empty message.content")
+    value = content.strip()
+    value = re.sub(r"^<think>.*?</think>\s*", "", value, flags=re.DOTALL)
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", value, flags=re.DOTALL)
+    if fenced:
+        value = fenced.group(1).strip()
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        # Some OpenAI-compatible endpoints ignore response_format and return
+        # the requested paragraph directly. Plain text is valid for this task.
+        if value.startswith(("{", "[")):
+            raise InvalidLanguageResponse(
+                f"Malformed JSON response: {value[:160]!r}"
+            ) from None
+        return value
+    if isinstance(parsed, dict):
+        text = parsed.get("battery_description")
+        if not isinstance(text, str) or not text.strip():
+            raise InvalidLanguageResponse(
+                "JSON response lacks a non-empty battery_description field"
+            )
+        return text.strip()
+    if isinstance(parsed, str) and parsed.strip():
+        return parsed.strip()
+    raise InvalidLanguageResponse(
+        f"Unsupported response JSON type: {type(parsed).__name__}"
+    )
+
+
+def validate_generated_description(text: str, anchors: list[str]) -> str:
+    missing = [anchor for anchor in anchors if anchor not in text]
+    forbidden = (
+        "希望",
+        "要求",
+        "目标",
+        "不低于",
+        "至少",
+        "优化",
+        "multiplier",
+        "teacher",
+        "设计建议",
+    )
+    found_forbidden = [word for word in forbidden if word in text]
+    if missing or found_forbidden:
+        raise InvalidLanguageResponse(
+            f"Description validation failed; missing={missing}, "
+            f"forbidden={found_forbidden}; preview={text[:160]!r}"
+        )
+    return text
+
+
+def deepseek_description(
+    record: dict[str, Any], language: dict[str, Any]
+) -> tuple[str, dict[str, float]]:
     if not language["api_key"]:
         raise RuntimeError(f"Environment variable {language['api_key_env']} is not set")
-    anchors = protected_anchors(record["observation_canonical"])
+    observation = record["observation_canonical"]
+    anchors = protected_anchors(observation)
+    placeholder_facts, replacements = protected_placeholders(observation)
+    json_mode = bool(language.get("request_json_mode", False))
     prompt = {
-        "task": "把结构化DFN观测改写成一段自然、专业且连贯的中文电池描述",
+        "task": "把占位符形式的DFN事实组织成一段自然、专业且连贯的中文电池描述",
         "rules": [
             "这是对一块已有电池的客观描述，不是用户需求或设计请求",
             "不得使用希望、要求、目标、至少、不低于、优化等需求措辞",
             "不得推测寿命、安全、成本、材料成分或未提供的性能",
             "不得出现内部参数、multiplier、teacher、答案或设计建议",
-            "必须原样保留所有protected_anchors",
-            "只返回含battery_description字段的JSON对象",
+            "必须原样保留每个[[...]]占位符且每个占位符恰好出现一次",
+            "不要自行编写、修改或猜测任何数值，真实数值将由程序填回",
+            (
+                "只返回含battery_description字段的JSON对象"
+                if json_mode
+                else "只返回描述正文，不要JSON、Markdown、标题或解释"
+            ),
         ],
-        "protected_anchors": anchors,
-        "observation": record["observation_canonical"],
+        "placeholder_facts": placeholder_facts,
         "variant_id": record["task_id"],
     }
     payload = {
@@ -536,8 +655,9 @@ def deepseek_description(record: dict[str, Any], language: dict[str, Any]) -> st
         ],
         "temperature": float(language["temperature"]),
         "max_tokens": int(language["max_tokens"]),
-        "response_format": {"type": "json_object"},
     }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
     request = urllib.request.Request(
         language["base_url"].rstrip("/") + "/chat/completions",
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -547,18 +667,44 @@ def deepseek_description(record: dict[str, Any], language: dict[str, Any]) -> st
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=float(language["timeout_s"])) as response:
-        result = json.loads(response.read().decode("utf-8"))
-    parsed = json.loads(result["choices"][0]["message"]["content"])
-    text = str(parsed["battery_description"]).strip()
-    missing = [anchor for anchor in anchors if anchor not in text]
-    forbidden = ("希望", "要求", "目标", "不低于", "至少", "优化")
-    found_forbidden = [word for word in forbidden if word in text]
-    if missing or found_forbidden:
-        raise ValueError(
-            f"Invalid description; missing={missing}, forbidden={found_forbidden}"
-        )
-    return text
+    try:
+        with urllib.request.urlopen(
+            request, timeout=float(language["timeout_s"])
+        ) as response:
+            raw_result = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")[:300]
+        except OSError:
+            detail = ""
+        message = f"HTTP {exc.code}: {detail or exc.reason}"
+        if exc.code in (401, 402, 403):
+            raise FatalLanguageAPIError(message) from exc
+        if exc.code in (408, 409, 425, 429) or exc.code >= 500:
+            raise RetryableLanguageAPIError(message) from exc
+        raise InvalidLanguageResponse(message) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RetryableLanguageAPIError(f"{type(exc).__name__}: {exc}") from exc
+    try:
+        result = json.loads(raw_result)
+        content = result["choices"][0]["message"]["content"]
+    except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+        raise InvalidLanguageResponse(
+            f"Invalid API response envelope: {raw_result[:160]!r}"
+        ) from exc
+    raw_usage = result.get("usage", {})
+    usage = {
+        str(name): float(value)
+        for name, value in raw_usage.items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    try:
+        text = response_text(content)
+        text = restore_placeholders(text, replacements)
+        return validate_generated_description(text, anchors), usage
+    except InvalidLanguageResponse as exc:
+        exc.usage = usage
+        raise
 
 
 def apply_deepseek(
@@ -566,7 +712,12 @@ def apply_deepseek(
     language: dict[str, Any],
     checkpoint: Path,
     require_success: bool,
-) -> None:
+    maximum_records: int | None = None,
+) -> dict[str, Any]:
+    if maximum_records is not None and maximum_records <= 0:
+        raise ValueError("maximum_records must be positive when provided")
+    if int(language["concurrency"]) <= 0 or int(language["retries"]) <= 0:
+        raise ValueError("DeepSeek concurrency and retries must be positive")
     prior = (
         {row["task_id"]: row for row in read_jsonl(checkpoint)}
         if checkpoint.exists()
@@ -578,53 +729,129 @@ def apply_deepseek(
             record["battery_description"] = old["battery_description"]
             record["messages"][1]["content"] = old["battery_description"]
             record["provenance"] = old["provenance"]
-    pending = [
+    all_pending = [
         record
         for record in records
         if record["provenance"]["language_source"] != language["model"]
     ]
+    pending = all_pending[:maximum_records] if maximum_records is not None else all_pending
 
-    def rewrite(record: dict[str, Any]) -> tuple[dict[str, Any], str | None, str | None]:
+    def rewrite(
+        record: dict[str, Any],
+    ) -> tuple[
+        dict[str, Any], str | None, dict[str, float], str | None, bool
+    ]:
         last_error = None
         for attempt in range(1, int(language["retries"]) + 1):
             try:
-                return record, deepseek_description(record, language), None
-            except (
-                ValueError,
-                KeyError,
-                TypeError,
-                IndexError,
-                json.JSONDecodeError,
-                urllib.error.URLError,
-                TimeoutError,
-            ) as exc:
+                text, usage = deepseek_description(record, language)
+                return record, text, usage, None, False
+            except FatalLanguageAPIError as exc:
+                return record, None, {}, f"{type(exc).__name__}: {exc}", True
+            except InvalidLanguageResponse as exc:
+                # The provider has already billed this completed generation.
+                # Do not pay for repeated format retries.
+                return (
+                    record,
+                    None,
+                    exc.usage,
+                    f"{type(exc).__name__}: {exc}",
+                    False,
+                )
+            except RetryableLanguageAPIError as exc:
                 last_error = f"{type(exc).__name__}: {exc}"
-                time.sleep(min(2 ** (attempt - 1), 8))
-        return record, None, last_error
+                if attempt < int(language["retries"]):
+                    time.sleep(min(2 ** (attempt - 1), 8))
+        return record, None, {}, last_error, False
 
     failures = 0
     completed = 0
+    consecutive_failures = 0
+    abort_error = None
+    usage_totals: dict[str, float] = {}
+    concurrency = int(language["concurrency"])
+    submission_batch_size = max(
+        concurrency, int(language.get("submission_batch_size", concurrency * 2))
+    )
+    probe_records = int(language.get("failure_probe_records", 20))
+    maximum_failure_rate = float(language.get("maximum_failure_rate", 0.25))
+    maximum_consecutive_failures = int(
+        language.get("maximum_consecutive_failures", 8)
+    )
     with ThreadPoolExecutor(max_workers=int(language["concurrency"])) as executor:
-        futures = [executor.submit(rewrite, record) for record in pending]
-        for future in as_completed(futures):
-            record, text, error = future.result()
-            if text is None:
-                failures += 1
-                record.setdefault("quality_flags", []).append("deepseek_description_failed")
-                record["provenance"]["language_error"] = error
-            else:
-                record["battery_description"] = text
-                record["messages"][1]["content"] = text
-                record["provenance"]["language_source"] = language["model"]
-                record["provenance"].pop("language_error", None)
-                record.pop("quality_flags", None)
-            completed += 1
-            if completed % 25 == 0:
-                write_jsonl(checkpoint, records)
-                print(f"DeepSeek descriptions: {completed}/{len(pending)}", flush=True)
+        for start in range(0, len(pending), submission_batch_size):
+            batch = pending[start : start + submission_batch_size]
+            futures = [executor.submit(rewrite, record) for record in batch]
+            fatal_in_batch = None
+            for future in as_completed(futures):
+                record, text, usage, error, fatal = future.result()
+                for name, value in usage.items():
+                    usage_totals[name] = usage_totals.get(name, 0.0) + value
+                if usage:
+                    record["provenance"]["language_usage"] = usage
+                if text is None:
+                    failures += 1
+                    consecutive_failures += 1
+                    flags = record.setdefault("quality_flags", [])
+                    if "deepseek_description_failed" not in flags:
+                        flags.append("deepseek_description_failed")
+                    record["provenance"]["language_error"] = error
+                    if fatal:
+                        fatal_in_batch = error
+                else:
+                    consecutive_failures = 0
+                    record["battery_description"] = text
+                    record["messages"][1]["content"] = text
+                    record["provenance"]["language_source"] = language["model"]
+                    record["provenance"].pop("language_error", None)
+                    remaining_flags = [
+                        flag
+                        for flag in record.get("quality_flags", [])
+                        if flag != "deepseek_description_failed"
+                    ]
+                    if remaining_flags:
+                        record["quality_flags"] = remaining_flags
+                    else:
+                        record.pop("quality_flags", None)
+                completed += 1
+            write_jsonl(checkpoint, records)
+            print(f"DeepSeek descriptions: {completed}/{len(pending)}", flush=True)
+            if fatal_in_batch:
+                abort_error = (
+                    "DeepSeek batch stopped after a fatal API error: " + fatal_in_batch
+                )
+                break
+            observed_failure_rate = failures / max(completed, 1)
+            if consecutive_failures >= maximum_consecutive_failures:
+                abort_error = (
+                    "DeepSeek batch stopped by consecutive-failure circuit breaker: "
+                    f"{consecutive_failures} failures"
+                )
+                break
+            if completed >= probe_records and observed_failure_rate > maximum_failure_rate:
+                abort_error = (
+                    "DeepSeek batch stopped by failure-rate circuit breaker: "
+                    f"{failures}/{completed}={observed_failure_rate:.1%} > "
+                    f"{maximum_failure_rate:.1%}"
+                )
+                break
     write_jsonl(checkpoint, records)
+    result = {
+        "model": language["model"],
+        "pending_before_limit": len(all_pending),
+        "selected": len(pending),
+        "completed": completed,
+        "succeeded": completed - failures,
+        "failed": failures,
+        "unattempted": len(all_pending) - completed,
+        "aborted": bool(abort_error),
+        "reported_usage": usage_totals,
+    }
+    if abort_error:
+        raise RuntimeError(f"{abort_error}; checkpoint was preserved; summary={result}")
     if failures and require_success:
         raise RuntimeError(f"DeepSeek failed for {failures} records; checkpoint was preserved")
+    return result
 
 
 def validate_dataset(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -688,6 +915,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--with-deepseek", action="store_true")
     parser.add_argument("--require-deepseek-success", action="store_true")
+    parser.add_argument(
+        "--deepseek-max-records",
+        type=int,
+        help="Only rewrite this many pending rows, for a low-cost smoke test.",
+    )
     args = parser.parse_args()
 
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
@@ -698,12 +930,14 @@ def main() -> None:
         raise ValueError(f"Physics archive is empty: {archive}")
     ambiguity_by_id, ambiguity_summary = build_ambiguity_index(physics_rows, config)
     records = build_records(physics_rows, config, ambiguity_by_id)
+    deepseek_run = None
     if args.with_deepseek:
-        apply_deepseek(
+        deepseek_run = apply_deepseek(
             records,
             language_config(config),
             output,
             require_success=args.require_deepseek_success,
+            maximum_records=args.deepseek_max_records,
         )
     write_jsonl(output, records)
     ambiguity_audit = Path(config["inverse_ambiguity"]["audit"])
@@ -719,6 +953,7 @@ def main() -> None:
         "output": str(output),
         "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
         "deepseek_requested": bool(args.with_deepseek),
+        "deepseek_run": deepseek_run,
         "validation": validation,
         "inverse_ambiguity_audit": str(ambiguity_audit),
         "inverse_ambiguity_report": str(ambiguity_report),

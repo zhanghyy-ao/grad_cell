@@ -96,7 +96,15 @@ language:
   default_base_url: https://api.deepseek.com
   default_model: deepseek-chat
   default_concurrency: 8
-  temperature: 0.9
-  max_tokens: 500
-  retries: 3
+  # Plain-text mode works with providers that ignore OpenAI JSON mode.
+  request_json_mode: false
+  temperature: 0.2
+  max_tokens: 800
+  # Only transient network/429/5xx errors are retried. Completed malformed
+  # generations are billable and fail without another paid request.
+  retries: 2
   timeout_s: 90
+  submission_batch_size: 8
+  failure_probe_records: 20
+  maximum_failure_rate: 0.25
+  maximum_consecutive_failures: 8
