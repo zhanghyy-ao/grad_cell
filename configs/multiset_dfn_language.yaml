@@ -99,7 +99,9 @@ language:
   # Plain-text mode works with providers that ignore OpenAI JSON mode.
   request_json_mode: false
   temperature: 0.2
-  max_tokens: 800
+  # null means the client sends no max_tokens field. The provider/model then
+  # controls its native reasoning and final-answer output budget.
+  max_tokens: null
   # Only transient network/429/5xx errors are retried. Completed malformed
   # generations are billable and fail without another paid request.
   retries: 2

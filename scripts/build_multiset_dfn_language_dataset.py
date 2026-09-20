@@ -654,8 +654,15 @@ def deepseek_description(
             {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
         ],
         "temperature": float(language["temperature"]),
-        "max_tokens": int(language["max_tokens"]),
     }
+    # Omit max_tokens when it is null so reasoning-capable providers can use
+    # their native output budget for both reasoning and the final answer.
+    max_tokens = language.get("max_tokens")
+    if max_tokens is not None:
+        max_tokens = int(max_tokens)
+        if max_tokens <= 0:
+            raise ValueError("language.max_tokens must be positive or null")
+        payload["max_tokens"] = max_tokens
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
     request = urllib.request.Request(
