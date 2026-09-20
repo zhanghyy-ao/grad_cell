@@ -164,7 +164,6 @@ def main() -> None:
         "trust_remote_code": args.trust_remote_code,
         "low_cpu_mem_usage": True,
         "local_files_only": args.local_files_only,
-        "text_field": text_field,
     }
     if args.load_in_4bit:
         from transformers import BitsAndBytesConfig
@@ -194,6 +193,7 @@ def main() -> None:
         "dtype": args.dtype,
         "load_in_4bit": args.load_in_4bit,
         "local_files_only": args.local_files_only,
+        "text_field": text_field,
         "device": str(device),
     }
 
