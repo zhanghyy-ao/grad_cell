@@ -27,10 +27,16 @@ DFN_EPOCHS="${DFN_EPOCHS:-10}"
 DFN_TIME_POINTS="${DFN_TIME_POINTS:-151}"
 DFN_TRAINING_VOLTAGE_FLOOR_V="${DFN_TRAINING_VOLTAGE_FLOOR_V:-2.0}"
 MINIMUM_DFN_SUCCESS_RATE="${MINIMUM_DFN_SUCCESS_RATE:-0.5}"
+DIRECT_DFN_SEEDS="${DIRECT_DFN_SEEDS:-7 17 27}"
 
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
+export PYTHONFAULTHANDLER=1
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
 
 test -s "$SOURCE_DATA"
 test -s "$MODEL_NAME/config.json"
@@ -60,8 +66,8 @@ if [[ ! -s "$EMBEDDINGS" ]]; then
     --local-files-only
 fi
 
-for seed in 7 17 27; do
-  "$PYTHON_BIN" scripts/train_battery_description_direct_dfn.py \
+for seed in $DIRECT_DFN_SEEDS; do
+  "$PYTHON_BIN" -X faulthandler scripts/train_battery_description_direct_dfn.py \
     --data "$DATA" \
     --embeddings "$EMBEDDINGS" \
     --output-dir "$RESULT_ROOT/seed_${seed}" \

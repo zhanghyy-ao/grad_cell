@@ -329,6 +329,7 @@ def main() -> None:
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but unavailable")
     device = torch.device(args.device)
+    print(json.dumps({"direct_dfn_stage": "load_data"}), flush=True)
     tensors, metadata, ordered_rows = prepare_data(args.data, args.embeddings)
     split_indices = {
         name: np.flatnonzero(metadata["splits"] == name) for name in ("train", "validation", "test")
@@ -339,6 +340,16 @@ def main() -> None:
         name: make_loader(tensors, indices, args.batch_size, name == "train", args.seed)
         for name, indices in split_indices.items()
     }
+    print(
+        json.dumps(
+            {
+                "direct_dfn_stage": "initialize_physics",
+                "pybamm_model": "DFN",
+                "parameter_set": metadata["parameter_sets"][0],
+            }
+        ),
+        flush=True,
+    )
     physics = DirectDFNPerformanceLayer(
         parameter_set=metadata["parameter_sets"][0],
         time_points=args.time_points,
@@ -350,6 +361,7 @@ def main() -> None:
         current_ramp_time_s=args.current_ramp_time_s,
         training_voltage_floor_v=args.training_voltage_floor_v,
     ).to(device)
+    print(json.dumps({"direct_dfn_stage": "initialize_mlp"}), flush=True)
     model_config = {
         "input_dim": tensors["embeddings"].shape[1],
         "hidden_dim": args.hidden_dim,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 import torch
 from torch import nn
@@ -66,6 +67,16 @@ class DirectDFNPerformanceLayer(nn.Module):
         }
         backends = {}
         for rate in self.rates:
+            print(
+                json.dumps(
+                    {
+                        "direct_dfn_stage": "build_backend",
+                        "rate_c": rate,
+                        "calculate_sensitivities": calculate_sensitivities,
+                    }
+                ),
+                flush=True,
+            )
             backend = PyBaMMBackend(
                 model_name="DFN",
                 parameter_set=parameter_set,
@@ -78,6 +89,7 @@ class DirectDFNPerformanceLayer(nn.Module):
                 current_ramp_time_s=current_ramp_time_s,
                 physical_voltage_cutoffs=False,
                 training_voltage_floor_v=training_voltage_floor_v,
+                solver_options={"num_threads": 1, "num_solvers": 1},
             )
             backends[f"rate_{rate:g}c"] = DifferentiablePhysicsLayer(backend)
         self.layers = nn.ModuleDict(backends)
@@ -85,6 +97,7 @@ class DirectDFNPerformanceLayer(nn.Module):
         self.register_buffer(
             "nominal_parameter_values", torch.as_tensor(nominal, dtype=torch.float32)
         )
+        self._reported_first_solve = False
 
     def forward(
         self, parameter_values: torch.Tensor, reference_capacity_ah: torch.Tensor
@@ -93,10 +106,27 @@ class DirectDFNPerformanceLayer(nn.Module):
             raise ValueError("parameter_values must have shape [batch, 7]")
         if reference_capacity_ah.shape != (parameter_values.shape[0],):
             raise ValueError("reference_capacity_ah must have shape [batch]")
+        report_first_solve = not self._reported_first_solve
+        if report_first_solve:
+            print(
+                json.dumps(
+                    {
+                        "direct_dfn_stage": "first_solve",
+                        "batch_size": parameter_values.shape[0],
+                        "device": str(parameter_values.device),
+                    }
+                ),
+                flush=True,
+            )
         summaries = {}
         statuses = []
         runtimes = []
         for rate in self.rates:
+            if report_first_solve:
+                print(
+                    json.dumps({"direct_dfn_stage": "solve_rate", "rate_c": rate}),
+                    flush=True,
+                )
             current = rate * reference_capacity_ah
             inputs = torch.cat([parameter_values, current[:, None]], dim=1)
             trajectory, status, runtime = self.layers[f"rate_{rate:g}c"](inputs)
@@ -110,6 +140,7 @@ class DirectDFNPerformanceLayer(nn.Module):
             summaries[rate] = (capacity, energy)
             statuses.append(status.bool())
             runtimes.append(runtime)
+        self._reported_first_solve = True
         capacity_1c, energy_1c = summaries[1.0]
         capacity_5c, energy_5c = summaries[5.0]
         capacity_6c, energy_6c = summaries[6.0]

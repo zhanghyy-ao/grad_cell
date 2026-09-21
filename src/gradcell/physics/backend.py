@@ -184,6 +184,7 @@ class PyBaMMBackend:
         current_ramp_time_s: float = 1.0,
         physical_voltage_cutoffs: bool = False,
         training_voltage_floor_v: float = -10.0,
+        solver_options: dict | None = None,
     ) -> None:
         # 延迟导入 PyBaMM，使 toy 后端和基础测试不依赖该可选依赖。
         try:
@@ -257,7 +258,11 @@ class PyBaMMBackend:
                 "Negative particle diffusivity [m2.s-1]": scaled_negative_diffusivity,
             }
         )
-        self.solver = pybamm.IDAKLUSolver(rtol=rtol, atol=atol)
+        self.solver = pybamm.IDAKLUSolver(
+            rtol=rtol,
+            atol=atol,
+            options=solver_options,
+        )
         self.t_eval = np.linspace(0.0, horizon_s, time_points)
         self.horizon_s = horizon_s
         self.output_variables = output_variables
