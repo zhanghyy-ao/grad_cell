@@ -50,6 +50,7 @@ class DirectDFNPerformanceLayer(nn.Module):
         cutoff_v: float = 2.5,
         gate_temperature_v: float = 0.02,
         current_ramp_time_s: float = 1.0,
+        training_voltage_floor_v: float = 2.0,
         calculate_sensitivities: bool = True,
     ) -> None:
         super().__init__()
@@ -76,6 +77,7 @@ class DirectDFNPerformanceLayer(nn.Module):
                 calculate_sensitivities=calculate_sensitivities,
                 current_ramp_time_s=current_ramp_time_s,
                 physical_voltage_cutoffs=False,
+                training_voltage_floor_v=training_voltage_floor_v,
             )
             backends[f"rate_{rate:g}c"] = DifferentiablePhysicsLayer(backend)
         self.layers = nn.ModuleDict(backends)

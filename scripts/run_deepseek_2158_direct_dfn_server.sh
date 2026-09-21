@@ -25,6 +25,8 @@ EMBED_BATCH_SIZE="${EMBED_BATCH_SIZE:-8}"
 DFN_BATCH_SIZE="${DFN_BATCH_SIZE:-2}"
 DFN_EPOCHS="${DFN_EPOCHS:-10}"
 DFN_TIME_POINTS="${DFN_TIME_POINTS:-151}"
+DFN_TRAINING_VOLTAGE_FLOOR_V="${DFN_TRAINING_VOLTAGE_FLOOR_V:-2.0}"
+MINIMUM_DFN_SUCCESS_RATE="${MINIMUM_DFN_SUCCESS_RATE:-0.5}"
 
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
 export HF_HUB_OFFLINE=1
@@ -75,6 +77,8 @@ for seed in 7 17 27; do
     --time-points "$DFN_TIME_POINTS" \
     --rtol 1e-6 \
     --atol 1e-8 \
+    --training-voltage-floor-v "$DFN_TRAINING_VOLTAGE_FLOOR_V" \
+    --minimum-dfn-success-rate "$MINIMUM_DFN_SUCCESS_RATE" \
     --early-stopping-patience 3 \
     --seed "$seed" \
     --device cuda

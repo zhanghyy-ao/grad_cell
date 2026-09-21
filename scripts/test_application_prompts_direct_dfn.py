@@ -70,6 +70,7 @@ def main() -> None:
         cutoff_v=float(physics_config["cutoff_v"]),
         gate_temperature_v=float(physics_config["gate_temperature_v"]),
         current_ramp_time_s=float(physics_config["current_ramp_time_s"]),
+        training_voltage_floor_v=float(physics_config.get("training_voltage_floor_v", 2.0)),
         calculate_sensitivities=False,
     ).to(device)
 

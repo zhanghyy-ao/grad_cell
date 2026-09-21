@@ -309,11 +309,17 @@ def main() -> None:
     parser.add_argument("--cutoff-v", type=float, default=2.5)
     parser.add_argument("--gate-temperature-v", type=float, default=0.02)
     parser.add_argument("--current-ramp-time-s", type=float, default=1.0)
+    parser.add_argument("--training-voltage-floor-v", type=float, default=2.0)
+    parser.add_argument("--minimum-dfn-success-rate", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
     if min(args.batch_size, args.epochs, args.hidden_dim, args.time_points) < 1:
         parser.error("batch size, epochs, hidden dimension, and time points must be positive")
+    if not 0.0 <= args.minimum_dfn_success_rate <= 1.0:
+        parser.error("minimum DFN success rate must be between zero and one")
+    if args.training_voltage_floor_v >= args.cutoff_v:
+        parser.error("training voltage floor must be below the soft cutoff voltage")
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -342,6 +348,7 @@ def main() -> None:
         cutoff_v=args.cutoff_v,
         gate_temperature_v=args.gate_temperature_v,
         current_ramp_time_s=args.current_ramp_time_s,
+        training_voltage_floor_v=args.training_voltage_floor_v,
     ).to(device)
     model_config = {
         "input_dim": tensors["embeddings"].shape[1],
@@ -411,10 +418,16 @@ def main() -> None:
             runtime_s += float(components["runtime_s"])
             seen += count
         validation, _ = evaluate(model, physics, loaders["validation"], device, metadata, weights)
+        train_success_rate = successes / max(seen, 1)
+        if train_success_rate < args.minimum_dfn_success_rate:
+            raise RuntimeError(
+                "Direct DFN success rate is too low for trustworthy physics-gradient training: "
+                f"{train_success_rate:.1%} < {args.minimum_dfn_success_rate:.1%}"
+            )
         record = {
             "epoch": epoch,
             **{f"train_{name}": value / max(seen, 1) for name, value in totals.items()},
-            "train_dfn_success_rate": successes / max(seen, 1),
+            "train_dfn_success_rate": train_success_rate,
             "train_dfn_runtime_s": runtime_s,
             **{f"validation_{name}": value for name, value in validation.items()},
         }
@@ -453,6 +466,7 @@ def main() -> None:
                         "cutoff_v": args.cutoff_v,
                         "gate_temperature_v": args.gate_temperature_v,
                         "current_ramp_time_s": args.current_ramp_time_s,
+                        "training_voltage_floor_v": args.training_voltage_floor_v,
                     },
                     "training_args": vars(args),
                 },

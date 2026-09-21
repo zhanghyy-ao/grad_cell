@@ -18,7 +18,7 @@
 
 Qwen 仍然只负责预先生成冻结 embedding。训练时更新的是设计 MLP；PyBaMM 没有可训练权重，但它提供物理梯度。
 
-训练中的截止电压采用平滑 sigmoid 门计算容量和能量。原因是硬截止事件本身不可微；电压轨迹仍由真实 DFN 计算，反向梯度仍来自 PyBaMM sensitivity。最终验收应继续使用物理硬截止 DFN 重放，检查平滑训练指标与严格指标的偏差。
+训练中的截止电压采用平滑 sigmoid 门计算容量和能量。原因是硬截止事件本身不可微；电压轨迹仍由真实 DFN 计算，反向梯度仍来自 PyBaMM sensitivity。为避免耗尽后的非物理低电压区导致 IDA 步长塌缩，求解器在 2.0V 设置安全终止事件，而性能积分的软截止仍为 2.5V。最终验收应继续使用物理硬截止 DFN 重放，检查平滑训练指标与严格指标的偏差。
 
 ## 七个输入参数
 
@@ -43,6 +43,8 @@ CUDA_DEVICE=2 \
 QWEN_MODEL_NAME="$PWD/models/Qwen3-8B" \
 DFN_BATCH_SIZE=2 \
 DFN_EPOCHS=10 \
+DFN_TRAINING_VOLTAGE_FLOOR_V=2.0 \
+MINIMUM_DFN_SUCCESS_RATE=0.5 \
 bash scripts/run_deepseek_2158_direct_dfn_server.sh
 ```
 
