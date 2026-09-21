@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 
 if [[ -f .env ]]; then
   set -a
@@ -26,17 +27,26 @@ DFN_EPOCHS="${DFN_EPOCHS:-10}"
 DFN_TIME_POINTS="${DFN_TIME_POINTS:-151}"
 
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+test -s "$SOURCE_DATA"
+test -s "$MODEL_NAME/config.json"
+mkdir -p "$(dirname "$DATA")" "$(dirname "$EMBEDDINGS")" "$RESULT_ROOT"
 
 "$PYTHON_BIN" scripts/prepare_deepseek_topk_dataset.py \
-  --source "$SOURCE_DATA" \
+  --input "$SOURCE_DATA" \
   --output "$DATA" \
   --manifest "$MANIFEST" \
   --language-source "$LANGUAGE_SOURCE" \
   --expected-records "$EXPECTED_RECORDS" \
-  --top-k 1
+  --train-ratio 0.80 \
+  --validation-ratio 0.10 \
+  --test-ratio 0.10 \
+  --seed 7
 
-if [[ ! -f "$EMBEDDINGS" ]]; then
-  "$PYTHON_BIN" scripts/cache_battery_description_embeddings.py \
+if [[ ! -s "$EMBEDDINGS" ]]; then
+  "$PYTHON_BIN" scripts/extract_paper_explore_embeddings.py \
     --data "$DATA" \
     --text-field battery_description \
     --model-name "$MODEL_NAME" \
