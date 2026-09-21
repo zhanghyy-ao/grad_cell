@@ -1,4 +1,4 @@
-"""Direct differentiable PyBaMM DFN performance layer for language design."""
+"""Direct differentiable PyBaMM performance layers for language design."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from .physics_guided import DEFAULT_PERFORMANCE_FIELDS
 
 
 @dataclass(frozen=True)
-class DirectDFNOutput:
+class DirectPhysicsOutput:
     performance: torch.Tensor
     status: torch.Tensor
     runtime_s: torch.Tensor
@@ -36,8 +36,13 @@ def _discharge_summary(
     return capacity_ah, energy_wh
 
 
-class DirectDFNPerformanceLayer(nn.Module):
-    """Run differentiable 1C/5C/6C DFN solves and return eight performance metrics."""
+class DirectPhysicsPerformanceLayer(nn.Module):
+    """Run differentiable 1C/5C/6C PyBaMM solves and return performance metrics.
+
+    SPMe is intended for online training. DFN remains available for sparse
+    correction and final verification. Both models share exactly the same
+    parameter decoding and metric definitions.
+    """
 
     performance_fields = DEFAULT_PERFORMANCE_FIELDS
 
@@ -53,13 +58,18 @@ class DirectDFNPerformanceLayer(nn.Module):
         current_ramp_time_s: float = 1.0,
         training_voltage_floor_v: float = 2.0,
         calculate_sensitivities: bool = True,
+        model_name: str = "DFN",
     ) -> None:
         super().__init__()
+        model_name = str(model_name)
+        if model_name not in {"SPMe", "DFN"}:
+            raise ValueError("model_name must be either 'SPMe' or 'DFN'")
         if time_points < 2:
             raise ValueError("time_points must be at least two")
         if maximum_duration_factor <= 0.0 or gate_temperature_v <= 0.0:
             raise ValueError("duration factor and gate temperature must be positive")
         self.rates = (1.0, 5.0, 6.0)
+        self.model_name = model_name
         self.cutoff_v = float(cutoff_v)
         self.gate_temperature_v = float(gate_temperature_v)
         self.horizons = {
@@ -70,7 +80,8 @@ class DirectDFNPerformanceLayer(nn.Module):
             print(
                 json.dumps(
                     {
-                        "direct_dfn_stage": "build_backend",
+                        "direct_physics_stage": "build_backend",
+                        "pybamm_model": model_name,
                         "rate_c": rate,
                         "calculate_sensitivities": calculate_sensitivities,
                     }
@@ -78,7 +89,7 @@ class DirectDFNPerformanceLayer(nn.Module):
                 flush=True,
             )
             backend = PyBaMMBackend(
-                model_name="DFN",
+                model_name=model_name,
                 parameter_set=parameter_set,
                 output_variables=("Voltage [V]",),
                 time_points=time_points,
@@ -101,7 +112,7 @@ class DirectDFNPerformanceLayer(nn.Module):
 
     def forward(
         self, parameter_values: torch.Tensor, reference_capacity_ah: torch.Tensor
-    ) -> DirectDFNOutput:
+    ) -> DirectPhysicsOutput:
         if parameter_values.ndim != 2 or parameter_values.shape[1] != 7:
             raise ValueError("parameter_values must have shape [batch, 7]")
         if reference_capacity_ah.shape != (parameter_values.shape[0],):
@@ -111,7 +122,8 @@ class DirectDFNPerformanceLayer(nn.Module):
             print(
                 json.dumps(
                     {
-                        "direct_dfn_stage": "first_solve",
+                        "direct_physics_stage": "first_solve",
+                        "pybamm_model": self.model_name,
                         "batch_size": parameter_values.shape[0],
                         "device": str(parameter_values.device),
                     }
@@ -124,7 +136,13 @@ class DirectDFNPerformanceLayer(nn.Module):
         for rate in self.rates:
             if report_first_solve:
                 print(
-                    json.dumps({"direct_dfn_stage": "solve_rate", "rate_c": rate}),
+                    json.dumps(
+                        {
+                            "direct_physics_stage": "solve_rate",
+                            "pybamm_model": self.model_name,
+                            "rate_c": rate,
+                        }
+                    ),
                     flush=True,
                 )
             current = rate * reference_capacity_ah
@@ -161,4 +179,9 @@ class DirectDFNPerformanceLayer(nn.Module):
         runtime_s = torch.stack(runtimes, dim=1).sum(dim=1)
         finite = torch.isfinite(performance).all(dim=1)
         positive = (performance > 0.0).all(dim=1)
-        return DirectDFNOutput(performance, status & finite & positive, runtime_s)
+        return DirectPhysicsOutput(performance, status & finite & positive, runtime_s)
+
+
+# Backward-compatible names for existing direct-DFN scripts and checkpoints.
+DirectDFNOutput = DirectPhysicsOutput
+DirectDFNPerformanceLayer = DirectPhysicsPerformanceLayer

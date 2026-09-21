@@ -11,7 +11,14 @@ class _PhysicsFunction(torch.autograd.Function):
     def forward(ctx, physics_inputs: torch.Tensor, backend):
         # PyBaMM 后端在 CPU 上接收 NumPy 数组；detach 只切断前向转换，
         # 反向梯度由后端返回的显式 Jacobian 提供。
-        batch = backend.solve_batch(physics_inputs.detach().cpu().double().numpy())
+        original_sensitivity_setting = getattr(backend, "calculate_sensitivities", None)
+        if original_sensitivity_setting is not None and not physics_inputs.requires_grad:
+            backend.calculate_sensitivities = False
+        try:
+            batch = backend.solve_batch(physics_inputs.detach().cpu().double().numpy())
+        finally:
+            if original_sensitivity_setting is not None:
+                backend.calculate_sensitivities = original_sensitivity_setting
         # 将后端轨迹、Jacobian、状态和运行时间恢复为与输入相容的 Tensor。
         y = torch.as_tensor(
             batch.trajectories,

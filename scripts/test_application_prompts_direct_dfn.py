@@ -55,8 +55,15 @@ def main() -> None:
         raise ValueError("Prompt dataset is empty")
     device = torch.device(args.device)
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    if checkpoint.get("schema") != "gradcell.language_single_design_direct_dfn.v1":
-        raise ValueError("Checkpoint is not a direct-DFN language design model")
+    if checkpoint.get("schema") not in {
+        "gradcell.language_single_design_direct_dfn.v1",
+        "gradcell.language_design_three_stage.v1",
+    }:
+        raise ValueError("Checkpoint is not a supported language design model")
+    if checkpoint.get("schema") == "gradcell.language_design_three_stage.v1" and int(
+        checkpoint.get("stage", 0)
+    ) < 2:
+        raise ValueError("Application DFN replay requires a stage-2 or stage-3 checkpoint")
     model = SingleDesignPhysicsMLP(**checkpoint["model_config"])
     model.load_state_dict(checkpoint["model_state"])
     model.to(device).eval().requires_grad_(False)
@@ -72,6 +79,7 @@ def main() -> None:
         current_ramp_time_s=float(physics_config["current_ramp_time_s"]),
         training_voltage_floor_v=float(physics_config.get("training_voltage_floor_v", 2.0)),
         calculate_sensitivities=False,
+        model_name="DFN",
     ).to(device)
 
     from transformers import AutoModel, AutoTokenizer

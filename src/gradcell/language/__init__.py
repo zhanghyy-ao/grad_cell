@@ -2,7 +2,12 @@
 
 from .codec import GradCellLanguageCodec, StructuredPreferenceTask
 from .dataset import LanguageDesignDataset
-from .direct_dfn import DirectDFNOutput, DirectDFNPerformanceLayer
+from .direct_dfn import (
+    DirectDFNOutput,
+    DirectDFNPerformanceLayer,
+    DirectPhysicsOutput,
+    DirectPhysicsPerformanceLayer,
+)
 from .json_design import (
     MaterialDesignJSONCodec,
     ParsedMaterialDesign,
@@ -27,6 +32,8 @@ __all__ = [
     "DEFAULT_PERFORMANCE_FIELDS",
     "DirectDFNOutput",
     "DirectDFNPerformanceLayer",
+    "DirectPhysicsOutput",
+    "DirectPhysicsPerformanceLayer",
     "DFNPerformanceSurrogate",
     "SingleDesignPhysicsMLP",
     "StructuredPreferenceTask",

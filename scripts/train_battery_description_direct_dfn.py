@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from gradcell.benchmark.dfn_parameter import PARAMETER_FIELDS
 from gradcell.language import (
     DEFAULT_PERFORMANCE_FIELDS,
-    DirectDFNPerformanceLayer,
+    DirectPhysicsPerformanceLayer,
     SingleDesignPhysicsMLP,
 )
 
@@ -183,7 +183,7 @@ def direct_loss(
     target_design: torch.Tensor,
     target_performance: torch.Tensor,
     reference_capacity: torch.Tensor,
-    physics: DirectDFNPerformanceLayer,
+    physics: DirectPhysicsPerformanceLayer,
     metadata: dict[str, Any],
     weights: dict[str, float],
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
@@ -195,11 +195,11 @@ def direct_loss(
     design_log, _, physical_values = decode_design(
         predicted_design, design_mean, design_std, nominal
     )
-    dfn = physics(physical_values, reference_capacity)
+    simulation = physics(physical_values, reference_capacity)
     normalized_performance = (
-        torch.log(dfn.performance.clamp_min(1e-8)) - performance_mean
+        torch.log(simulation.performance.clamp_min(1e-8)) - performance_mean
     ) / performance_std
-    valid = dfn.status
+    valid = simulation.status
     design_loss = torch.nn.functional.smooth_l1_loss(predicted_design, target_design)
     if valid.any():
         performance_loss = torch.nn.functional.smooth_l1_loss(
@@ -221,14 +221,14 @@ def direct_loss(
         "feasibility": feasibility_loss,
         "support": support_loss,
         "failure_rate": failure_loss,
-        "runtime_s": dfn.runtime_s.sum(),
+        "runtime_s": simulation.runtime_s.sum(),
     }
-    return total, components, dfn.performance, valid
+    return total, components, simulation.performance, valid
 
 
 def evaluate(
     model: SingleDesignPhysicsMLP,
-    physics: DirectDFNPerformanceLayer,
+    physics: DirectPhysicsPerformanceLayer,
     loader: DataLoader,
     device: torch.device,
     metadata: dict[str, Any],
@@ -271,8 +271,8 @@ def evaluate(
             targets.append(performance.cpu())
             indices.append(index.numpy())
     metrics = {name: value / max(seen, 1) for name, value in sums.items()}
-    metrics["dfn_success_rate"] = successes / max(seen, 1)
-    metrics["dfn_runtime_s"] = runtime_s
+    metrics["physics_success_rate"] = successes / max(seen, 1)
+    metrics["physics_runtime_s"] = runtime_s
     arrays = {
         "indices": np.concatenate(indices),
         "predicted_design": torch.cat(predicted_designs).numpy(),
@@ -284,11 +284,16 @@ def evaluate(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Train language-to-design MLP with direct PyBaMM DFN sensitivities."
+        description="Train a language-to-design MLP with direct PyBaMM sensitivities."
     )
     parser.add_argument("--data", type=Path, required=True)
     parser.add_argument("--embeddings", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--initial-checkpoint", type=Path)
+    parser.add_argument("--physics-model", choices=("SPMe", "DFN"), default="DFN")
+    parser.add_argument("--max-train-records", type=int)
+    parser.add_argument("--max-validation-records", type=int)
+    parser.add_argument("--max-test-records", type=int)
     parser.add_argument("--hidden-dim", type=int, default=512)
     parser.add_argument("--num-blocks", type=int, default=2)
     parser.add_argument("--dropout", type=float, default=0.1)
@@ -310,14 +315,15 @@ def main() -> None:
     parser.add_argument("--gate-temperature-v", type=float, default=0.02)
     parser.add_argument("--current-ramp-time-s", type=float, default=1.0)
     parser.add_argument("--training-voltage-floor-v", type=float, default=2.0)
-    parser.add_argument("--minimum-dfn-success-rate", type=float, default=0.5)
+    parser.add_argument("--minimum-physics-success-rate", type=float, default=0.5)
+    parser.add_argument("--minimum-dfn-success-rate", type=float, dest="minimum_physics_success_rate", help=argparse.SUPPRESS)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
     if min(args.batch_size, args.epochs, args.hidden_dim, args.time_points) < 1:
         parser.error("batch size, epochs, hidden dimension, and time points must be positive")
-    if not 0.0 <= args.minimum_dfn_success_rate <= 1.0:
-        parser.error("minimum DFN success rate must be between zero and one")
+    if not 0.0 <= args.minimum_physics_success_rate <= 1.0:
+        parser.error("minimum physics success rate must be between zero and one")
     if args.training_voltage_floor_v >= args.cutoff_v:
         parser.error("training voltage floor must be below the soft cutoff voltage")
 
@@ -329,11 +335,25 @@ def main() -> None:
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA requested but unavailable")
     device = torch.device(args.device)
-    print(json.dumps({"direct_dfn_stage": "load_data"}), flush=True)
+    print(json.dumps({"direct_physics_stage": "load_data"}), flush=True)
     tensors, metadata, ordered_rows = prepare_data(args.data, args.embeddings)
     split_indices = {
         name: np.flatnonzero(metadata["splits"] == name) for name in ("train", "validation", "test")
     }
+    limits = {
+        "train": args.max_train_records,
+        "validation": args.max_validation_records,
+        "test": args.max_test_records,
+    }
+    selection_rng = np.random.default_rng(args.seed)
+    for name, limit in limits.items():
+        if limit is not None:
+            if limit < 1:
+                parser.error(f"--max-{name}-records must be positive")
+            index = split_indices[name]
+            split_indices[name] = np.sort(
+                selection_rng.choice(index, size=min(limit, len(index)), replace=False)
+            )
     if any(len(indices) == 0 for indices in split_indices.values()):
         raise ValueError("train, validation, and test must all be non-empty")
     loaders = {
@@ -343,14 +363,14 @@ def main() -> None:
     print(
         json.dumps(
             {
-                "direct_dfn_stage": "initialize_physics",
-                "pybamm_model": "DFN",
+                "direct_physics_stage": "initialize_physics",
+                "pybamm_model": args.physics_model,
                 "parameter_set": metadata["parameter_sets"][0],
             }
         ),
         flush=True,
     )
-    physics = DirectDFNPerformanceLayer(
+    physics = DirectPhysicsPerformanceLayer(
         parameter_set=metadata["parameter_sets"][0],
         time_points=args.time_points,
         maximum_duration_factor=args.maximum_duration_factor,
@@ -360,8 +380,9 @@ def main() -> None:
         gate_temperature_v=args.gate_temperature_v,
         current_ramp_time_s=args.current_ramp_time_s,
         training_voltage_floor_v=args.training_voltage_floor_v,
+        model_name=args.physics_model,
     ).to(device)
-    print(json.dumps({"direct_dfn_stage": "initialize_mlp"}), flush=True)
+    print(json.dumps({"direct_physics_stage": "initialize_mlp"}), flush=True)
     model_config = {
         "input_dim": tensors["embeddings"].shape[1],
         "hidden_dim": args.hidden_dim,
@@ -371,6 +392,23 @@ def main() -> None:
         "design_upper": metadata["design_upper_standardized"].tolist(),
     }
     model = SingleDesignPhysicsMLP(**model_config).to(device)
+    if args.initial_checkpoint is not None:
+        initial = torch.load(args.initial_checkpoint, map_location="cpu", weights_only=False)
+        if initial.get("dataset_sha256") != metadata["dataset_sha256"]:
+            raise ValueError("Initial checkpoint was trained on different dataset content")
+        if initial.get("model_config") != model_config:
+            raise ValueError("Initial checkpoint MLP architecture or design bounds do not match")
+        model.load_state_dict(initial["model_state"])
+        print(
+            json.dumps(
+                {
+                    "direct_physics_stage": "loaded_initial_checkpoint",
+                    "checkpoint": str(args.initial_checkpoint),
+                    "source_stage": initial.get("stage"),
+                }
+            ),
+            flush=True,
+        )
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
     )
@@ -415,12 +453,12 @@ def main() -> None:
             )
             if gradient_qa is None:
                 gradient_qa = {
-                    "source": "PyBaMM_DFN_forward_sensitivities",
+                    "source": f"PyBaMM_{args.physics_model}_forward_sensitivities",
                     "finite": bool(np.isfinite(gradient_norm)),
                     "design_model_gradient_norm": gradient_norm,
                 }
                 if not gradient_qa["finite"] or gradient_norm <= 0.0:
-                    raise RuntimeError(f"Direct DFN gradient QA failed: {gradient_qa}")
+                    raise RuntimeError(f"Direct physics gradient QA failed: {gradient_qa}")
             optimizer.step()
             count = len(embedding)
             totals["loss"] += float(loss.detach()) * count
@@ -431,16 +469,17 @@ def main() -> None:
             seen += count
         validation, _ = evaluate(model, physics, loaders["validation"], device, metadata, weights)
         train_success_rate = successes / max(seen, 1)
-        if train_success_rate < args.minimum_dfn_success_rate:
+        if train_success_rate < args.minimum_physics_success_rate:
             raise RuntimeError(
-                "Direct DFN success rate is too low for trustworthy physics-gradient training: "
-                f"{train_success_rate:.1%} < {args.minimum_dfn_success_rate:.1%}"
+                f"Direct {args.physics_model} success rate is too low for trustworthy "
+                "physics-gradient training: "
+                f"{train_success_rate:.1%} < {args.minimum_physics_success_rate:.1%}"
             )
         record = {
             "epoch": epoch,
             **{f"train_{name}": value / max(seen, 1) for name, value in totals.items()},
-            "train_dfn_success_rate": train_success_rate,
-            "train_dfn_runtime_s": runtime_s,
+            "train_physics_success_rate": train_success_rate,
+            "train_physics_runtime_s": runtime_s,
             **{f"validation_{name}": value for name, value in validation.items()},
         }
         history.append(record)
@@ -453,7 +492,13 @@ def main() -> None:
             patience = 0
             torch.save(
                 {
-                    "schema": "gradcell.language_single_design_direct_dfn.v1",
+                    "schema": "gradcell.language_design_three_stage.v1",
+                    "stage": 2 if args.physics_model == "SPMe" else 3,
+                    "stage_name": (
+                        "spme_online_physics_gradient"
+                        if args.physics_model == "SPMe"
+                        else "dfn_sampled_correction"
+                    ),
                     "model_state": model.state_dict(),
                     "model_config": model_config,
                     "parameter_names": metadata["parameter_names"],
@@ -470,7 +515,7 @@ def main() -> None:
                     "dataset_sha256": metadata["dataset_sha256"],
                     "gradient_qa": gradient_qa,
                     "physics_config": {
-                        "model": "DFN",
+                        "model": args.physics_model,
                         "time_points": args.time_points,
                         "maximum_duration_factor": args.maximum_duration_factor,
                         "rtol": args.rtol,
@@ -481,6 +526,10 @@ def main() -> None:
                         "training_voltage_floor_v": args.training_voltage_floor_v,
                     },
                     "training_args": vars(args),
+                    "selected_task_ids": {
+                        name: [str(metadata["task_ids"][position]) for position in indices]
+                        for name, indices in split_indices.items()
+                    },
                 },
                 args.output_dir / "best_model.pt",
             )
@@ -510,7 +559,7 @@ def main() -> None:
         source = ordered_rows[int(row_index)]
         prediction_rows.append(
             {
-                "schema": "gradcell.language_single_design_direct_dfn_prediction.v1",
+                "schema": "gradcell.language_single_design_direct_physics_prediction.v1",
                 "task_id": source["task_id"],
                 "physical_design_id": source["physical_design_id"],
                 "split": source["split"],
@@ -520,7 +569,8 @@ def main() -> None:
                 "predicted_parameter_multipliers": dict(
                     zip(PARAMETER_FIELDS, predicted_multipliers[position].tolist(), strict=True)
                 ),
-                "direct_dfn_predicted_performance": dict(
+                "direct_physics_model": args.physics_model,
+                "direct_physics_predicted_performance": dict(
                     zip(
                         DEFAULT_PERFORMANCE_FIELDS,
                         arrays["predicted_performance"][position].tolist(),
@@ -538,13 +588,19 @@ def main() -> None:
         )
     write_jsonl(args.output_dir / "test_predictions.jsonl", prediction_rows)
     report = {
-        "schema": "gradcell.language_single_design_direct_dfn_metrics.v1",
+        "schema": "gradcell.language_single_design_direct_physics_metrics.v1",
         "best_validation_loss": best_validation,
         "validation": validation_metrics,
         "test": test_metrics,
         "split_sizes": {name: len(indices) for name, indices in split_indices.items()},
+        "sampled_training": any(limit is not None for limit in limits.values()),
+        "selected_task_ids": {
+            name: [str(metadata["task_ids"][position]) for position in indices]
+            for name, indices in split_indices.items()
+        },
         "single_design_output": True,
-        "gradient_source": "PyBaMM_DFN_forward_sensitivities",
+        "physics_model": args.physics_model,
+        "gradient_source": f"PyBaMM_{args.physics_model}_forward_sensitivities",
         "uses_performance_surrogate": False,
         "gradient_qa": gradient_qa,
         "parameter_names": list(PARAMETER_FIELDS),
