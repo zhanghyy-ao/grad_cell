@@ -2,6 +2,7 @@
 
 from .codec import GradCellLanguageCodec, StructuredPreferenceTask
 from .dataset import LanguageDesignDataset
+from .direct_dfn import DirectDFNOutput, DirectDFNPerformanceLayer
 from .json_design import (
     MaterialDesignJSONCodec,
     ParsedMaterialDesign,
@@ -24,6 +25,8 @@ __all__ = [
     "ParsedMaterialDesign",
     "QwenBackbone",
     "DEFAULT_PERFORMANCE_FIELDS",
+    "DirectDFNOutput",
+    "DirectDFNPerformanceLayer",
     "DFNPerformanceSurrogate",
     "SingleDesignPhysicsMLP",
     "StructuredPreferenceTask",
