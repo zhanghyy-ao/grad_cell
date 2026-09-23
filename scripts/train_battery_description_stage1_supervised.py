@@ -108,7 +108,12 @@ def main() -> None:
             total += float(loss.detach()) * len(target)
             seen += len(target)
         validation = evaluate(model, loaders["validation"], device)
-        record = {"epoch": epoch, "train_design_loss": total / max(seen, 1), **validation}
+        record = {
+            "epoch": epoch,
+            "train_design_smooth_l1": total / max(seen, 1),
+            "validation_design_mse": validation["normalized_design_mse"],
+            "validation_design_smooth_l1": validation["normalized_design_smooth_l1"],
+        }
         history.append(record)
         (args.output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
         print(json.dumps(record), flush=True)

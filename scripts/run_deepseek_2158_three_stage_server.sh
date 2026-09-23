@@ -91,6 +91,9 @@ for seed in $SEEDS; do
     --seed "$seed" \
     --device cuda
 
+  "$PYTHON_BIN" scripts/plot_stage1_training.py \
+    --run-dir "$STAGE1_DIR"
+
   echo "[Stage 2/3] SPMe online physics-gradient training (seed=$seed)"
   "$PYTHON_BIN" -X faulthandler scripts/train_battery_description_direct_dfn.py \
     --data "$DATA" \
